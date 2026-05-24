@@ -303,6 +303,15 @@ export default function MerqeuBienestarLogin() {
                   ¿Problemas para ingresar? Contacta a Talento Humano.
                 </p>
 
+                <a
+                  href="/polla/login"
+                  className="mt-4 w-full inline-flex items-center justify-center gap-3 py-3 rounded-xl border-2 border-[#f4a900] bg-[#f4a900]/10 text-[#f4a900] text-sm font-bold hover:bg-[#f4a900]/20 transition"
+                >
+                  <span className="text-lg">⚽</span>
+                  ¿Ya llenaste tu Polla Mundialista?
+                  <ArrowRight className="h-4 w-4" />
+                </a>
+
                 {bootstrapEnabled && (
                   <button
                     type="button"

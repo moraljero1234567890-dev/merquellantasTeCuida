@@ -58,8 +58,18 @@ async function ensureMatchesSeeded(): Promise<void> {
   const col = await pollaMatchesCollection();
   const count = await col.estimatedDocumentCount();
   if (count > 0) return;
-  const { buildMatchSeed } = await import("./seed-data");
-  const docs = buildMatchSeed();
+  let docs: MatchDoc[] = [];
+  try {
+    const { fetchLatestFromConfiguredProvider } = await import("./providers");
+    const result = await fetchLatestFromConfiguredProvider();
+    docs = result.docs;
+  } catch (err) {
+    console.warn("Failed to fetch from provider, using static seed:", err);
+  }
+  if (docs.length === 0) {
+    const { buildMatchSeed } = await import("./seed-data");
+    docs = buildMatchSeed();
+  }
   if (docs.length === 0) return;
   await col.insertMany(docs);
   await col.createIndex({ utcDate: 1 });
