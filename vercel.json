@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/polla/cron/refresh",
-      "schedule": "0 */2 * 6-7 *"
+      "schedule": "0 12 * * *"
     }
   ]
 }
