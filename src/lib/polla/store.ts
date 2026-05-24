@@ -114,6 +114,17 @@ export async function getPollaUserByCedula(cedula: string): Promise<PollaLoginRe
   return null;
 }
 
+export async function getEffectiveAttempts(cedula: string): Promise<number> {
+  const user = await getPollaUserByCedula(cedula);
+  if (!user) return 0;
+  const db = await getDb();
+  const adjustments = await db.collection("polla_attempt_adjustments")
+    .find({ cedula })
+    .toArray();
+  const totalAdj = adjustments.reduce((sum: number, a) => sum + ((a as { delta?: number }).delta ?? 0), 0);
+  return user.attemptsAllowed + totalAdj;
+}
+
 export async function listPredictionsForUser(cedula: string): Promise<PredictionDoc[]> {
   const col = await pollaPredictionsCollection();
   return col.find({ userEmail: cedula }).sort({ attempt: 1 }).toArray();
@@ -244,7 +255,7 @@ export async function createPollaUser(input: {
     email: input.email.trim().toLowerCase(),
     name: input.name.trim(),
     passwordHash,
-    attemptsAllowed: Math.max(1, Math.min(20, Math.floor(input.attemptsAllowed))),
+    attemptsAllowed: Math.max(0, Math.min(20, Math.floor(input.attemptsAllowed))),
     createdAt: new Date(),
   };
   await pollaCol.replaceOne({ _id: doc._id }, doc, { upsert: true });

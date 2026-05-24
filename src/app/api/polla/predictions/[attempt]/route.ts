@@ -102,7 +102,9 @@ export async function GET(request: NextRequest, ctx: { params: Promise<Params> }
   if (!user) {
     return NextResponse.json({ error: "Unknown user" }, { status: 404 });
   }
-  if (attempt > user.attemptsAllowed) {
+  const { getEffectiveAttempts } = await import("@/lib/polla/store");
+  const effectiveAttempts = await getEffectiveAttempts(cedula);
+  if (attempt > effectiveAttempts) {
     return NextResponse.json({ error: "Attempt exceeds allowed quota" }, { status: 403 });
   }
   let prediction = await loadOrCreate(cedula, attempt);
@@ -142,7 +144,9 @@ export async function POST(request: NextRequest, ctx: { params: Promise<Params> 
   if (!user) {
     return NextResponse.json({ error: "Unknown user" }, { status: 404 });
   }
-  if (attempt > user.attemptsAllowed) {
+  const { getEffectiveAttempts } = await import("@/lib/polla/store");
+  const effectiveAttempts = await getEffectiveAttempts(cedula);
+  if (attempt > effectiveAttempts) {
     return NextResponse.json({ error: "Attempt exceeds allowed quota" }, { status: 403 });
   }
   const lockStatus = await getLockStatus();
@@ -221,6 +225,23 @@ export async function POST(request: NextRequest, ctx: { params: Promise<Params> 
   }
 
   prediction = await recomputeKnockout(prediction, lockStatus.useActualStandings);
+
+  // Auto-complete when all sections are filled
+  const allGroupsFilled = Object.keys(prediction.groupScores).length >= 72;
+  const allKnockoutFilled = [
+    ...prediction.knockout.r32,
+    ...prediction.knockout.r16,
+    ...prediction.knockout.qf,
+    ...prediction.knockout.sf,
+    ...(prediction.knockout.third ? [prediction.knockout.third] : []),
+    ...(prediction.knockout.final ? [prediction.knockout.final] : []),
+  ].every((p) => p.home != null && p.away != null);
+  const hasChampion = !!prediction.champion;
+
+  if (allGroupsFilled && allKnockoutFilled && hasChampion && prediction.status === "draft") {
+    prediction = { ...prediction, status: "complete", completedAt: new Date() };
+  }
+
   prediction.updatedAt = new Date();
   await upsertPrediction(prediction);
   return NextResponse.json({ prediction, lockStatus });

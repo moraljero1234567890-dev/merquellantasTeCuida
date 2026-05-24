@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { getPollaUserByCedula, listPredictionsForUser } from "@/lib/polla/store";
+import { getPollaUserByCedula, getEffectiveAttempts, listPredictionsForUser } from "@/lib/polla/store";
 
 export const dynamic = "force-dynamic";
 
@@ -14,8 +14,9 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "Unknown user" }, { status: 404 });
   }
   const predictions = await listPredictionsForUser(cedula);
+  const effectiveAttempts = await getEffectiveAttempts(cedula);
   return NextResponse.json({
-    user: { cedula: user.cedula, name: user.name, attemptsAllowed: user.attemptsAllowed },
+    user: { cedula: user.cedula, name: user.name, attemptsAllowed: effectiveAttempts },
     predictions: predictions.map((p) => ({
       attempt: p.attempt,
       status: p.status,
