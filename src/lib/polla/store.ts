@@ -131,6 +131,88 @@ export async function isTournamentLocked(): Promise<boolean> {
   return new Date(first[0].utcDate).getTime() <= Date.now();
 }
 
+export type LockStatus = {
+  groupLocked: boolean;
+  knockoutOpen: boolean;
+  editableStages: string[];
+  allGroupFinished: boolean;
+  useActualStandings: boolean;
+};
+
+export async function getLockStatus(): Promise<LockStatus> {
+  const matches = await getAllMatches();
+  const WORLD_CUP_START = new Date("2026-06-11T00:00:00Z");
+  const now = new Date();
+
+  if (now < WORLD_CUP_START) {
+    return {
+      groupLocked: false,
+      knockoutOpen: true,
+      editableStages: ["ROUND_OF_32", "ROUND_OF_16", "QUARTER_FINALS", "SEMI_FINALS", "THIRD_PLACE", "FINAL"],
+      allGroupFinished: false,
+      useActualStandings: false,
+    };
+  }
+
+  const groupMatches = matches.filter((m) => m.stage === "GROUP_STAGE");
+  const allGroupFinished = groupMatches.length > 0 && groupMatches.every((m) => m.status === "FINISHED");
+
+  if (!allGroupFinished) {
+    return { groupLocked: true, knockoutOpen: false, editableStages: [], allGroupFinished: false, useActualStandings: false };
+  }
+
+  const knockoutOrder: string[] = ["ROUND_OF_32", "ROUND_OF_16", "QUARTER_FINALS", "SEMI_FINALS"];
+  const editableStages: string[] = [];
+
+  for (const stage of knockoutOrder) {
+    const stageMatches = matches.filter((m) => m.stage === stage);
+    if (stageMatches.length === 0) {
+      editableStages.push(stage);
+      break;
+    }
+    const allFinished = stageMatches.every((m) => m.status === "FINISHED");
+    const anyStarted = stageMatches.some((m) => m.status === "IN_PLAY" || m.status === "FINISHED");
+
+    if (!anyStarted) {
+      editableStages.push(stage);
+      break;
+    } else if (!allFinished) {
+      break;
+    }
+  }
+
+  // Third place + final: both editable after SF finishes, until either starts
+  const sfMatches = matches.filter((m) => m.stage === "SEMI_FINALS");
+  const sfAllDone = sfMatches.length > 0 && sfMatches.every((m) => m.status === "FINISHED");
+  if (sfAllDone) {
+    const thirdMatches = matches.filter((m) => m.stage === "THIRD_PLACE");
+    const finalMatches = matches.filter((m) => m.stage === "FINAL");
+    const thirdStarted = thirdMatches.some((m) => m.status === "IN_PLAY" || m.status === "FINISHED");
+    const finalStarted = finalMatches.some((m) => m.status === "IN_PLAY" || m.status === "FINISHED");
+    if (!thirdStarted && !finalStarted) {
+      editableStages.push("THIRD_PLACE", "FINAL");
+    }
+  }
+
+  return {
+    groupLocked: true,
+    knockoutOpen: editableStages.length > 0,
+    editableStages,
+    allGroupFinished: true,
+    useActualStandings: true,
+  };
+}
+
+export function extractActualGroupScores(matches: MatchDoc[]): Record<string, import("./types").GroupScore> {
+  const scores: Record<string, import("./types").GroupScore> = {};
+  for (const m of matches) {
+    if (m.stage === "GROUP_STAGE" && m.status === "FINISHED" && m.score?.fullTime) {
+      scores[m._id] = { home: m.score.fullTime.home, away: m.score.fullTime.away };
+    }
+  }
+  return scores;
+}
+
 export async function listAllPollaUsers(): Promise<PollaUserDoc[]> {
   const pollaCol = await pollaUsersCollection();
   return pollaCol.find({}).sort({ createdAt: -1 }).toArray();

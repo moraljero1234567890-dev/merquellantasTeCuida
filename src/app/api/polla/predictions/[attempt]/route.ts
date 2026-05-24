@@ -5,6 +5,8 @@ import {
   getPrediction,
   isTournamentLocked,
   upsertPrediction,
+  getLockStatus,
+  extractActualGroupScores,
 } from "@/lib/polla/store";
 import {
   buildKnockoutFromGroup,
@@ -43,9 +45,18 @@ async function loadOrCreate(cedula: string, attempt: number): Promise<Prediction
   return existing ?? emptyPrediction(cedula, attempt);
 }
 
-async function recomputeKnockout(prediction: PredictionDoc): Promise<PredictionDoc> {
+async function recomputeKnockout(prediction: PredictionDoc, useActual: boolean): Promise<PredictionDoc> {
   const matches = await getAllMatches();
   const groupMatches = matches.filter((m) => m.stage === "GROUP_STAGE");
+
+  if (useActual) {
+    const actualScores = extractActualGroupScores(matches);
+    const standings = computeGroupStandings(groupMatches, actualScores);
+    const knockout = buildKnockoutFromGroup(standings, prediction.knockout);
+    const champion = championFromFinal(knockout.final);
+    return { ...prediction, knockout, champion };
+  }
+
   if (!isGroupStageComplete(groupMatches, prediction.groupScores)) {
     return {
       ...prediction,
@@ -57,6 +68,24 @@ async function recomputeKnockout(prediction: PredictionDoc): Promise<PredictionD
   const knockout = buildKnockoutFromGroup(standings, prediction.knockout);
   const champion = championFromFinal(knockout.final);
   return { ...prediction, knockout, champion };
+}
+
+function findMatchStage(matchId: string, prediction: PredictionDoc): string | null {
+  for (const pick of prediction.knockout.r32) {
+    if (pick.matchId === matchId) return "ROUND_OF_32";
+  }
+  for (const pick of prediction.knockout.r16) {
+    if (pick.matchId === matchId) return "ROUND_OF_16";
+  }
+  for (const pick of prediction.knockout.qf) {
+    if (pick.matchId === matchId) return "QUARTER_FINALS";
+  }
+  for (const pick of prediction.knockout.sf) {
+    if (pick.matchId === matchId) return "SEMI_FINALS";
+  }
+  if (prediction.knockout.third?.matchId === matchId) return "THIRD_PLACE";
+  if (prediction.knockout.final?.matchId === matchId) return "FINAL";
+  return null;
 }
 
 export async function GET(request: NextRequest, ctx: { params: Promise<Params> }) {
@@ -76,8 +105,17 @@ export async function GET(request: NextRequest, ctx: { params: Promise<Params> }
   if (attempt > user.attemptsAllowed) {
     return NextResponse.json({ error: "Attempt exceeds allowed quota" }, { status: 403 });
   }
-  const prediction = await loadOrCreate(cedula, attempt);
-  return NextResponse.json({ prediction });
+  let prediction = await loadOrCreate(cedula, attempt);
+  const lockStatus = await getLockStatus();
+
+  // If actual standings should be used, recompute bracket from actual results
+  if (lockStatus.useActualStandings) {
+    prediction = await recomputeKnockout(prediction, true);
+    prediction.updatedAt = new Date();
+    await upsertPrediction(prediction);
+  }
+
+  return NextResponse.json({ prediction, lockStatus });
 }
 
 type PostBody =
@@ -107,13 +145,26 @@ export async function POST(request: NextRequest, ctx: { params: Promise<Params> 
   if (attempt > user.attemptsAllowed) {
     return NextResponse.json({ error: "Attempt exceeds allowed quota" }, { status: 403 });
   }
-  if (await isTournamentLocked()) {
-    return NextResponse.json({ error: "Tournament locked" }, { status: 423 });
-  }
+  const lockStatus = await getLockStatus();
 
   let prediction = await loadOrCreate(cedula, attempt);
   if (prediction.status === "locked") {
     return NextResponse.json({ error: "Prediction locked" }, { status: 423 });
+  }
+
+  if (body.kind === "group" && lockStatus.groupLocked) {
+    return NextResponse.json({ error: "Group predictions are locked" }, { status: 423 });
+  }
+
+  if (body.kind === "knockout") {
+    if (!lockStatus.knockoutOpen) {
+      return NextResponse.json({ error: "Knockout predictions are locked" }, { status: 423 });
+    }
+    // Check if this specific match's stage is editable
+    const matchStage = findMatchStage(body.matchId, prediction);
+    if (matchStage && !lockStatus.editableStages.includes(matchStage)) {
+      return NextResponse.json({ error: `${matchStage} predictions are locked` }, { status: 423 });
+    }
   }
 
   if (body.kind === "group") {
@@ -169,8 +220,8 @@ export async function POST(request: NextRequest, ctx: { params: Promise<Params> 
     return NextResponse.json({ error: "Invalid kind" }, { status: 400 });
   }
 
-  prediction = await recomputeKnockout(prediction);
+  prediction = await recomputeKnockout(prediction, lockStatus.useActualStandings);
   prediction.updatedAt = new Date();
   await upsertPrediction(prediction);
-  return NextResponse.json({ prediction });
+  return NextResponse.json({ prediction, lockStatus });
 }

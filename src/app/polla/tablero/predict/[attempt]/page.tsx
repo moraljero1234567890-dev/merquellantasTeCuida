@@ -28,12 +28,14 @@ function ScoreInput({
   onCommit,
   ariaLabel,
   size = "lg",
+  disabled,
 }: {
   value: number | null | undefined;
   onChange: (v: number | null) => void;
   onCommit?: () => void;
   ariaLabel: string;
   size?: "lg" | "sm";
+  disabled?: boolean;
 }) {
   const [text, setText] = useState<string>(
     value == null || value === undefined ? "" : String(value),
@@ -53,7 +55,9 @@ function ScoreInput({
       max={20}
       aria-label={ariaLabel}
       value={text}
+      readOnly={disabled}
       onChange={(e) => {
+        if (disabled) return;
         const raw = e.target.value.replace(/[^0-9]/g, "");
         setText(raw);
         if (raw === "") {
@@ -67,7 +71,7 @@ function ScoreInput({
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === "Tab") onCommit?.();
       }}
-      className={`${sizeCls} border border-[var(--line)] bg-white text-center font-mono font-black tabular-nums outline-none transition focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20`}
+      className={`${sizeCls} border border-[var(--line)] text-center font-mono font-black tabular-nums outline-none transition ${disabled ? "cursor-not-allowed bg-gray-100 text-gray-400" : "bg-white focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"}`}
     />
   );
 }
@@ -116,11 +120,13 @@ function GroupMatchRow({
   score,
   onChange,
   onCommit,
+  disabled,
 }: {
   match: ApiMatch;
   score: GroupDraft | undefined;
   onChange: (home: number | null, away: number | null) => void;
   onCommit: () => void;
+  disabled?: boolean;
 }) {
   const home = normalizeTeam(match.home);
   const away = normalizeTeam(match.away);
@@ -143,18 +149,20 @@ function GroupMatchRow({
       <div className="flex items-center gap-2">
         <ScoreInput
           value={score?.home ?? null}
-          onChange={(v) => onChange(v, score?.away ?? null)}
+          onChange={(v) => disabled ? undefined : onChange(v, score?.away ?? null)}
           onCommit={onCommit}
           ariaLabel={`${home.name} goles`}
+          disabled={disabled}
         />
         <span className="font-mono text-xs font-bold text-[var(--foreground-muted)]">
           vs
         </span>
         <ScoreInput
           value={score?.away ?? null}
-          onChange={(v) => onChange(score?.home ?? null, v)}
+          onChange={(v) => disabled ? undefined : onChange(score?.home ?? null, v)}
           onCommit={onCommit}
           ariaLabel={`${away.name} goles`}
+          disabled={disabled}
         />
       </div>
       <div>
@@ -186,12 +194,14 @@ function BracketCard({
   onCommit,
   onPickPenalty,
   size = "sm",
+  disabled,
 }: {
   pick: KnockoutPick;
   onChange: (home: number | null, away: number | null) => void;
   onCommit: () => void;
   onPickPenalty: (winner: "home" | "away") => void;
   size?: "sm" | "lg";
+  disabled?: boolean;
 }) {
   const isTie =
     pick.home != null && pick.away != null && pick.home === pick.away;
@@ -241,10 +251,11 @@ function BracketCard({
         />
         <ScoreInput
           value={score}
-          onChange={onScore}
+          onChange={disabled ? () => {} : onScore}
           onCommit={onCommit}
           ariaLabel={`${team.name} goles`}
           size={inputSize}
+          disabled={disabled}
         />
       </div>
     );
@@ -255,7 +266,7 @@ function BracketCard({
       {row("home", home, pick.home, (v) => onChange(v, pick.away))}
       <div className="h-px bg-[var(--line)]" />
       {row("away", away, pick.away, (v) => onChange(pick.home, v))}
-      {isTie && (
+      {isTie && !disabled && (
         <div className="border-t border-dashed border-[var(--line)] bg-[var(--surface)] px-2 py-1.5">
           <p className="font-mono text-[9px] uppercase tracking-[0.25em] text-[var(--foreground-muted)]">
             Gana en penales
@@ -379,6 +390,13 @@ export default function PollaPredictPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [lockStatus, setLockStatus] = useState<{
+    groupLocked: boolean;
+    knockoutOpen: boolean;
+    editableStages: string[];
+    allGroupFinished: boolean;
+    useActualStandings: boolean;
+  } | null>(null);
   const [activeGroup, setActiveGroup] = useState<string>("A");
   const saveTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
     new Map(),
@@ -433,6 +451,7 @@ export default function PollaPredictPage() {
         setMatches(arr.length ? arr : staticFallback());
         setPrediction(p.prediction);
         setGroupDrafts(p.prediction?.groupScores ?? {});
+        if (p.lockStatus) setLockStatus(p.lockStatus);
         setError(null);
       })
       .catch(() => {
@@ -524,6 +543,12 @@ export default function PollaPredictPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ...payload, cedula: session.cedula }),
         });
+        if (res.status === 423) {
+          inflight.current = Math.max(0, inflight.current - 1);
+          setSaveState("error");
+          setError("Esta ronda está bloqueada. No se pueden modificar estos pronósticos.");
+          return;
+        }
         if (!res.ok) throw new Error(await res.text());
         const data = (await res.json()) as { prediction: PredictionDoc };
         setPrediction(data.prediction);
@@ -778,7 +803,7 @@ export default function PollaPredictPage() {
               <div>
                 <dt>Eliminatorias</dt>
                 <dd className="mt-1 text-2xl font-black tabular-nums text-white">
-                  {groupComplete ? `${knockoutFilled}/${totalKnockout}` : "—"}
+                  {(groupComplete || lockStatus?.useActualStandings) ? `${knockoutFilled}/${totalKnockout}` : "—"}
                 </dd>
               </div>
             </div>
@@ -796,6 +821,37 @@ export default function PollaPredictPage() {
             {error && (
               <div className="mx-auto mt-6 max-w-6xl border-l-4 border-[var(--brand)] bg-[var(--brand-soft)] p-4 px-6 text-sm text-[var(--brand-dark)]">
                 {error}
+              </div>
+            )}
+
+            {lockStatus?.groupLocked && !lockStatus.allGroupFinished && (
+              <div className="mx-auto mt-6 max-w-6xl border-l-4 border-red-500 bg-red-50 p-4 px-6 text-sm text-red-800">
+                La fase de grupos está bloqueada. Los pronósticos de grupos se cerraron el 11 de junio.
+              </div>
+            )}
+
+            {lockStatus?.allGroupFinished && lockStatus.knockoutOpen && (
+              <div className="mx-auto mt-6 max-w-6xl border-l-4 border-emerald-600 bg-emerald-50 p-4 px-6 text-sm text-emerald-800">
+                ¡La fase de grupos terminó! La llave de eliminatorias se ha actualizado con los resultados reales.
+                {lockStatus.editableStages.length > 0 && (
+                  <> Puedes editar: <strong>{lockStatus.editableStages.map(s => {
+                    const names: Record<string, string> = {
+                      ROUND_OF_32: "Dieciseisavos",
+                      ROUND_OF_16: "Octavos",
+                      QUARTER_FINALS: "Cuartos",
+                      SEMI_FINALS: "Semifinales",
+                      THIRD_PLACE: "Tercer puesto",
+                      FINAL: "Final",
+                    };
+                    return names[s] || s;
+                  }).join(", ")}</strong>.</>
+                )}
+              </div>
+            )}
+
+            {lockStatus?.groupLocked && lockStatus.allGroupFinished && !lockStatus.knockoutOpen && (
+              <div className="mx-auto mt-6 max-w-6xl border-l-4 border-amber-500 bg-amber-50 p-4 px-6 text-sm text-amber-800">
+                La ronda actual está en juego. Los pronósticos se abrirán cuando termine esta ronda.
               </div>
             )}
 
@@ -881,6 +937,7 @@ export default function PollaPredictPage() {
                             score={groupDrafts[m._id]}
                             onChange={(h, a) => queueGroupSave(m._id, h, a)}
                             onCommit={() => flushMatch(m._id)}
+                            disabled={lockStatus?.groupLocked}
                           />
                         ))}
                       </ul>
@@ -896,18 +953,20 @@ export default function PollaPredictPage() {
                   Eliminatorias
                 </p>
                 <h2 className="mt-2 text-2xl font-black uppercase md:text-3xl">
-                  {groupComplete
-                    ? "Tu llave de eliminación"
-                    : "Completa la fase de grupos para abrir la llave"}
+                  {lockStatus?.useActualStandings
+                    ? "Llave basada en resultados reales"
+                    : groupComplete
+                      ? "Tu llave de eliminación"
+                      : "Completa la fase de grupos para abrir la llave"}
                 </h2>
-                {!groupComplete && (
+                {!groupComplete && !lockStatus?.useActualStandings && (
                   <p className="mt-2 text-sm text-[var(--foreground-soft)]">
                     Llevas {filledCount}/{totalGroupMatches} partidos predichos.
                   </p>
                 )}
               </div>
 
-              {groupComplete && (
+              {(groupComplete || lockStatus?.useActualStandings) && (
                 <div className="mt-8 space-y-10">
                   <p className="font-mono text-[10px] uppercase tracking-[0.3em] text-[var(--foreground-muted)] md:hidden">
                     Desliza horizontalmente para ver toda la llave &rarr;
@@ -959,7 +1018,9 @@ export default function PollaPredictPage() {
                             subtitle={`${filled}/${col.picks.length}`}
                             width={col.width}
                           >
-                            {col.picks.map((p, i) => (
+                            {col.picks.map((p, i) => {
+                              const stageDisabled = lockStatus?.groupLocked && !lockStatus.editableStages.includes(col.stage);
+                              return (
                               <BracketSlot
                                 key={p.matchId}
                                 isFirstOfPair={i % 2 === 0}
@@ -968,6 +1029,7 @@ export default function PollaPredictPage() {
                                 <BracketCard
                                   pick={p}
                                   size={col.stage === "FINAL" ? "lg" : "sm"}
+                                  disabled={stageDisabled}
                                   onChange={(h, a) =>
                                     queueKnockoutSave(
                                       p.matchId,
@@ -987,7 +1049,8 @@ export default function PollaPredictPage() {
                                   }
                                 />
                               </BracketSlot>
-                            ))}
+                              );
+                            })}
                           </BracketColumn>
                         );
                       })}
@@ -1004,6 +1067,7 @@ export default function PollaPredictPage() {
                       <BracketCard
                         pick={prediction.knockout.third}
                         size="lg"
+                        disabled={lockStatus?.groupLocked && !lockStatus.editableStages.includes("THIRD_PLACE")}
                         onChange={(h, a) =>
                           queueKnockoutSave(
                             prediction.knockout.third!.matchId,
@@ -1058,12 +1122,19 @@ export default function PollaPredictPage() {
 
                   {allDone && (
                     <div className="border border-emerald-600 bg-emerald-50 p-6 text-sm text-emerald-800">
-                      ¡Boleta completa! Tu pronóstico se ha guardado. Puedes
-                      regresar al{" "}
-                      <Link href="/polla/tablero" className="font-bold underline">
-                        panel
-                      </Link>{" "}
-                      o seguir ajustando hasta el primer partido.
+                      {lockStatus?.groupLocked
+                        ? <>¡Boleta completa! Tu pronóstico se ha guardado. Puedes
+                          regresar al{" "}
+                          <Link href="/polla/tablero" className="font-bold underline">
+                            panel
+                          </Link>.</>
+                        : <>¡Boleta completa! Tu pronóstico se ha guardado. Puedes
+                          regresar al{" "}
+                          <Link href="/polla/tablero" className="font-bold underline">
+                            panel
+                          </Link>{" "}
+                          o seguir ajustando hasta el primer partido.</>
+                      }
                     </div>
                   )}
                 </div>
