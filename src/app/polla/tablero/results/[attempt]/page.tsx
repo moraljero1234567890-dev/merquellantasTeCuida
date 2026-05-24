@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { formatDate } from "@/data/polla/worldcup2026";
 import { staticFallback, type ApiMatch } from "@/lib/polla/matches";
-import { clearPollaSession, readPollaSession, type PollaSession } from "@/lib/polla/session";
+import { usePollaAuth } from "@/lib/polla/use-polla-auth";
 import { displayTeam, normalizeTeam } from "@/lib/polla/team-display";
 import type { KnockoutPick, PredictionDoc } from "@/lib/polla/types";
 
@@ -52,20 +52,11 @@ export default function PollaResultsPage() {
   const params = useParams<{ attempt: string }>();
   const attemptNum = Number(params.attempt);
 
-  const [session, setSession] = useState<PollaSession | null>(null);
+  const { session, logout } = usePollaAuth();
   const [matches, setMatches] = useState<MatchWithScore[]>([]);
   const [prediction, setPrediction] = useState<PredictionDoc | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const s = readPollaSession();
-    if (!s) {
-      router.replace("/polla/login");
-      return;
-    }
-    setSession(s);
-  }, [router]);
 
   useEffect(() => {
     if (!session) return;
@@ -103,10 +94,7 @@ export default function PollaResultsPage() {
     [matches],
   );
 
-  function handleLogout() {
-    clearPollaSession();
-    router.replace("/polla/login");
-  }
+  const handleLogout = logout;
 
   if (!session) {
     return (

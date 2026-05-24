@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { usePollaAuth } from "@/lib/polla/use-polla-auth";
 import { writePollaSession } from "@/lib/polla/session";
 
 const HERO_IMAGE =
@@ -13,10 +14,17 @@ const MERQUE_LOGO =
 
 export default function PollaLoginPage() {
   const router = useRouter();
+  const { session: existingSession, checked } = usePollaAuth({ redirect: false });
   const [cedula, setCedula] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (checked && existingSession) {
+      router.replace("/polla/tablero");
+    }
+  }, [checked, existingSession, router]);
 
   async function handleSubmit(e: React.FormEvent<HTMLFormElement>) {
     e.preventDefault();

@@ -1,9 +1,8 @@
 "use client";
 
 import Link from "next/link";
-import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { clearPollaSession, readPollaSession, type PollaSession } from "@/lib/polla/session";
+import { usePollaAuth } from "@/lib/polla/use-polla-auth";
 
 const MERQUE_LOGO =
   "https://www.merquellantas.com/assets/images/logo/Logo-Merquellantas.png";
@@ -18,20 +17,10 @@ type AttemptSummary = {
 };
 
 export default function PollaDashboardPage() {
-  const router = useRouter();
-  const [session, setSession] = useState<PollaSession | null>(null);
+  const { session, logout } = usePollaAuth();
   const [attempts, setAttempts] = useState<AttemptSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const s = readPollaSession();
-    if (!s) {
-      router.replace("/polla/login");
-      return;
-    }
-    setSession(s);
-  }, [router]);
 
   useEffect(() => {
     if (!session) return;
@@ -55,11 +44,6 @@ export default function PollaDashboardPage() {
       cancelled = true;
     };
   }, [session]);
-
-  function handleLogout() {
-    clearPollaSession();
-    router.replace("/polla/login");
-  }
 
   if (!session) {
     return (
@@ -102,7 +86,7 @@ export default function PollaDashboardPage() {
               {session.name}
             </span>
             <button
-              onClick={handleLogout}
+              onClick={logout}
               className="rounded-sm border border-[var(--line)] px-4 py-2 text-sm font-semibold transition hover:border-[var(--brand)] hover:text-[var(--brand)]"
             >
               Cerrar sesión

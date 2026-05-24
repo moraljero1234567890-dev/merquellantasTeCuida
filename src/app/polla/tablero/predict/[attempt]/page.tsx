@@ -11,7 +11,7 @@ import {
 } from "react";
 import { formatDate } from "@/data/polla/worldcup2026";
 import { staticFallback, type ApiMatch } from "@/lib/polla/matches";
-import { clearPollaSession, readPollaSession, type PollaSession } from "@/lib/polla/session";
+import { usePollaAuth } from "@/lib/polla/use-polla-auth";
 import { displayTeam, normalizeTeam } from "@/lib/polla/team-display";
 import type { KnockoutPick, PredictionDoc } from "@/lib/polla/types";
 
@@ -383,7 +383,7 @@ export default function PollaPredictPage() {
   const params = useParams<{ attempt: string }>();
   const attemptNum = Number(params.attempt);
 
-  const [session, setSession] = useState<PollaSession | null>(null);
+  const { session, logout } = usePollaAuth();
   const [matches, setMatches] = useState<ApiMatch[]>([]);
   const [prediction, setPrediction] = useState<PredictionDoc | null>(null);
   const [groupDrafts, setGroupDrafts] = useState<Record<string, GroupDraft>>({});
@@ -417,21 +417,15 @@ export default function PollaPredictPage() {
   const inflight = useRef<number>(0);
 
   useEffect(() => {
-    const s = readPollaSession();
-    if (!s) {
-      router.replace("/polla/login");
-      return;
-    }
+    if (!session) return;
     if (
       !Number.isInteger(attemptNum) ||
       attemptNum < 1 ||
-      attemptNum > s.attemptsAllowed
+      attemptNum > session.attemptsAllowed
     ) {
       router.replace("/polla/tablero");
-      return;
     }
-    setSession(s);
-  }, [router, attemptNum]);
+  }, [session, router, attemptNum]);
 
   useEffect(() => {
     if (!session) return;
@@ -716,10 +710,7 @@ export default function PollaPredictPage() {
     };
   }, [sendPayload]);
 
-  function handleLogout() {
-    clearPollaSession();
-    router.replace("/polla/login");
-  }
+  const handleLogout = logout;
 
   if (!session) {
     return (
