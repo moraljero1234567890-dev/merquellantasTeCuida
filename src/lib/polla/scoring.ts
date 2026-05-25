@@ -2,27 +2,22 @@ import "server-only";
 import type { KnockoutPick, MatchDoc, PredictionDoc } from "./types";
 
 export const POINTS = {
-  GROUP_OUTCOME: 10,
-  GROUP_EXACT: 20,
-  GROUP_UNIQUE_EXACT: 40,
-  R16_WINNER: 20,
-  QF_WINNER: 30,
-  SF_WINNER: 40,
-  RUNNER_UP: 50,
-  CHAMPION: 60,
+  GROUP_OUTCOME: 30,
+  GROUP_EXACT: 50,
+  GROUP_GOAL_DIFF: 20,
+  CHAMPION: 300,
+  RUNNER_UP: 250,
+  CHAMPION_AND_RUNNER_UP: 350,
 } as const;
 
 export type ScoreBreakdown = {
   group: {
     outcomes: number;
     exact: number;
-    uniqueExact: number;
+    goalDiff: number;
     points: number;
   };
   knockout: {
-    r16: number;
-    qf: number;
-    sf: number;
     runnerUp: number;
     champion: number;
     points: number;
@@ -124,8 +119,8 @@ function pickedWinnerCode(p: KnockoutPick): string | null {
 
 function emptyBreakdown(): ScoreBreakdown {
   return {
-    group: { outcomes: 0, exact: 0, uniqueExact: 0, points: 0 },
-    knockout: { r16: 0, qf: 0, sf: 0, runnerUp: 0, champion: 0, points: 0 },
+    group: { outcomes: 0, exact: 0, goalDiff: 0, points: 0 },
+    knockout: { runnerUp: 0, champion: 0, points: 0 },
     total: 0,
   };
 }
@@ -140,19 +135,6 @@ export function computeLeaderboard(
   for (const m of groupReal) realResultById.set(m.id, { home: m.home, away: m.away });
 
   const knockReal = knockoutWinnersByStage(matches);
-
-  const exactHits = new Map<string, string[]>();
-  for (const p of predictions) {
-    for (const m of groupReal) {
-      const pick = p.groupScores[m.id];
-      if (!pick) continue;
-      if (pick.home === m.home && pick.away === m.away) {
-        const arr = exactHits.get(m.id) ?? [];
-        arr.push(p._id);
-        exactHits.set(m.id, arr);
-      }
-    }
-  }
 
   const userByEmail = new Map(users.map((u) => [u.email, u]));
   const totalAttemptsByEmail = new Map<string, number>();
@@ -173,46 +155,24 @@ export function computeLeaderboard(
       const pick = p.groupScores[m.id];
       if (!pick) continue;
       if (pick.home === m.home && pick.away === m.away) {
-        const hits = exactHits.get(m.id) ?? [];
-        if (hits.length === 1 && hits[0] === p._id) {
-          br.group.uniqueExact += 1;
-          br.group.points += POINTS.GROUP_UNIQUE_EXACT;
-        } else {
-          br.group.exact += 1;
-          br.group.points += POINTS.GROUP_EXACT;
-        }
+        br.group.exact += 1;
+        br.group.points += POINTS.GROUP_EXACT;
       } else if (outcome(pick.home, pick.away) === outcome(m.home, m.away)) {
-        br.group.outcomes += 1;
-        br.group.points += POINTS.GROUP_OUTCOME;
+        if ((pick.home - pick.away) === (m.home - m.away)) {
+          br.group.goalDiff += 1;
+          br.group.points += POINTS.GROUP_GOAL_DIFF;
+        } else {
+          br.group.outcomes += 1;
+          br.group.points += POINTS.GROUP_OUTCOME;
+        }
+      } else if ((pick.home - pick.away) === (m.home - m.away)) {
+        br.group.goalDiff += 1;
+        br.group.points += POINTS.GROUP_GOAL_DIFF;
       }
     }
 
-    for (const pick of p.knockout.r16) {
-      const w = pickedWinnerCode(pick);
-      if (w && knockReal.r16.has(w)) {
-        br.knockout.r16 += 1;
-        br.knockout.points += POINTS.R16_WINNER;
-      }
-    }
-    for (const pick of p.knockout.qf) {
-      const w = pickedWinnerCode(pick);
-      if (w && knockReal.qf.has(w)) {
-        br.knockout.qf += 1;
-        br.knockout.points += POINTS.QF_WINNER;
-      }
-    }
-    for (const pick of p.knockout.sf) {
-      const w = pickedWinnerCode(pick);
-      if (w && knockReal.sf.has(w)) {
-        br.knockout.sf += 1;
-        br.knockout.points += POINTS.SF_WINNER;
-      }
-    }
-
-    if (knockReal.champion && p.champion?.code === knockReal.champion) {
-      br.knockout.champion = 1;
-      br.knockout.points += POINTS.CHAMPION;
-    }
+    const gotChampion = knockReal.champion && p.champion?.code === knockReal.champion;
+    let gotRunnerUp = false;
     if (knockReal.runnerUp && p.knockout.final) {
       const finalPick = p.knockout.final;
       const winner = pickedWinnerCode(finalPick);
@@ -223,9 +183,20 @@ export function computeLeaderboard(
             ? finalPick.homeTeamCode
             : null;
       if (loser && loser === knockReal.runnerUp) {
-        br.knockout.runnerUp = 1;
-        br.knockout.points += POINTS.RUNNER_UP;
+        gotRunnerUp = true;
       }
+    }
+
+    if (gotChampion && gotRunnerUp) {
+      br.knockout.champion = 1;
+      br.knockout.runnerUp = 1;
+      br.knockout.points += POINTS.CHAMPION_AND_RUNNER_UP;
+    } else if (gotChampion) {
+      br.knockout.champion = 1;
+      br.knockout.points += POINTS.CHAMPION;
+    } else if (gotRunnerUp) {
+      br.knockout.runnerUp = 1;
+      br.knockout.points += POINTS.RUNNER_UP;
     }
 
     br.total = br.group.points + br.knockout.points;

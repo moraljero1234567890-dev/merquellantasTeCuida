@@ -26,13 +26,10 @@ type LeaderboardRow = {
     group: {
       outcomes: number;
       exact: number;
-      uniqueExact: number;
+      goalDiff: number;
       points: number;
     };
     knockout: {
-      r16: number;
-      qf: number;
-      sf: number;
       runnerUp: number;
       champion: number;
       points: number;
@@ -563,9 +560,9 @@ export default function PollaAdminPage() {
                             {row.breakdown.group.points}
                           </div>
                           <div className="font-mono text-[10px] text-[var(--foreground-muted)]">
-                            {row.breakdown.group.uniqueExact}u ·{" "}
-                            {row.breakdown.group.exact}e ·{" "}
-                            {row.breakdown.group.outcomes}g
+                            {row.breakdown.group.exact}ex ·{" "}
+                            {row.breakdown.group.outcomes}res ·{" "}
+                            {row.breakdown.group.goalDiff}dif
                           </div>
                         </td>
                         <td className="py-3 pr-3 text-right">
@@ -573,11 +570,8 @@ export default function PollaAdminPage() {
                             {row.breakdown.knockout.points}
                           </div>
                           <div className="font-mono text-[10px] text-[var(--foreground-muted)]">
-                            {row.breakdown.knockout.r16}·
-                            {row.breakdown.knockout.qf}·
-                            {row.breakdown.knockout.sf}
+                            {row.breakdown.knockout.champion ? "camp" : ""}
                             {row.breakdown.knockout.runnerUp ? " ·sub" : ""}
-                            {row.breakdown.knockout.champion ? " ·camp" : ""}
                           </div>
                         </td>
                         <td className="py-3 pr-3 text-right font-mono text-lg font-black tabular-nums">
@@ -589,8 +583,7 @@ export default function PollaAdminPage() {
                 </tbody>
               </table>
               <p className="mt-3 font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--foreground-muted)]">
-                Grupos: u = unicos, e = exactos, g = solo ganador · Elim: r16 ·
-                cuartos · semis (+ sub / campeón)
+                Grupos: ex = exacto (50), res = resultado (30), dif = diferencia de gol (20) · Camp = campeón (300), Sub = subcampeón (250), ambos = 350
               </p>
             </div>
           )}
