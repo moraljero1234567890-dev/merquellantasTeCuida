@@ -485,9 +485,10 @@ export default function PollaPredictPage() {
     return map;
   }, [groupMatches]);
 
-  const filledCount = Object.values(groupDrafts).filter(
-    (d) => typeof d.home === "number" && typeof d.away === "number",
-  ).length;
+  const filledCount = groupMatches.filter((m) => {
+    const d = groupDrafts[m._id];
+    return d && typeof d.home === "number" && typeof d.away === "number";
+  }).length;
   const totalGroupMatches = groupMatches.length;
   const groupComplete =
     totalGroupMatches > 0 && filledCount === totalGroupMatches;

@@ -1,21 +1,8 @@
 import { NextResponse } from "next/server";
 import { getDb } from "@/lib/db";
-import { getPollaUserByCedula, createPollaUser } from "@/lib/polla/store";
-import { pollaMatchesCollection } from "@/lib/polla/collections";
+import { getPollaUserByCedula, getEffectiveAttempts, createPollaUser } from "@/lib/polla/store";
 
 export const dynamic = "force-dynamic";
-
-async function getEffectiveAttempts(cedula: string): Promise<number> {
-  const db = await getDb();
-  const user = await getPollaUserByCedula(cedula);
-  if (!user) return 0;
-  const base = user.attemptsAllowed;
-  const adjustments = await db.collection("polla_attempt_adjustments")
-    .find({ cedula })
-    .toArray();
-  const totalAdj = adjustments.reduce((sum, a) => sum + (a.delta as number), 0);
-  return base + totalAdj;
-}
 
 export async function POST(request: Request) {
   let body: {

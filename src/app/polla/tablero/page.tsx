@@ -18,6 +18,7 @@ type AttemptSummary = {
 
 export default function PollaDashboardPage() {
   const { session, logout } = usePollaAuth();
+  const [effectiveTotal, setEffectiveTotal] = useState<number | null>(null);
   const [attempts, setAttempts] = useState<AttemptSummary[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -39,6 +40,9 @@ export default function PollaDashboardPage() {
       .then((data) => {
         if (cancelled) return;
         setAttempts(data.predictions ?? []);
+        if (data.user?.attemptsAllowed != null) {
+          setEffectiveTotal(data.user.attemptsAllowed);
+        }
         setError(null);
       })
       .catch(() => {
@@ -109,7 +113,7 @@ export default function PollaDashboardPage() {
     );
   }
 
-  const total = session.attemptsAllowed;
+  const total = effectiveTotal ?? session.attemptsAllowed;
   const filledAttempts = new Map(attempts.map((a) => [a.attempt, a]));
   const rows: AttemptSummary[] = [];
   for (let i = 1; i <= total; i++) {

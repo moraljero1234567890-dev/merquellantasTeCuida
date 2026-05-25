@@ -47,7 +47,7 @@ async function loadOrCreate(cedula: string, attempt: number): Promise<Prediction
 
 async function recomputeKnockout(prediction: PredictionDoc, useActual: boolean): Promise<PredictionDoc> {
   const matches = await getAllMatches();
-  const groupMatches = matches.filter((m) => m.stage === "GROUP_STAGE");
+  const groupMatches = matches.filter((m) => m.stage === "GROUP_STAGE" && m.group);
 
   if (useActual) {
     const actualScores = extractActualGroupScores(matches);
