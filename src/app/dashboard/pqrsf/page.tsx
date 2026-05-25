@@ -7,7 +7,7 @@ import DashboardNavbar from '../navbar';
 import { X, Send, AlertCircle, History, MessageSquare, CheckCircle, Clock, Calendar, Sparkles } from 'lucide-react';
 import { useSession } from 'next-auth/react';
 
-type PqrsfType = 'Pregunta' | 'Queja' | 'Reclamo' | 'Sugerencia' | 'Felicitación';
+type PqrsfType = 'Petición' | 'Queja' | 'Reclamo' | 'Sugerencia' | 'Felicitación';
 
 interface MyPQRSF {
   _id: string;
@@ -21,7 +21,7 @@ interface MyPQRSF {
 
 export default function PqrsfPage() {
   const { data: session } = useSession();
-  const [type, setType] = useState<PqrsfType>('Pregunta');
+  const [type, setType] = useState<PqrsfType>('Petición');
   const [message, setMessage] = useState('');
   const [isAnonymous, setIsAnonymous] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
@@ -61,7 +61,7 @@ export default function PqrsfPage() {
 
   const getTypeColor = (t: string) => {
     const colors: Record<string, string> = {
-      'Pregunta': 'bg-blue-100 text-blue-800',
+      'Petición': 'bg-blue-100 text-blue-800',
       'Queja': 'bg-red-100 text-red-800',
       'Reclamo': 'bg-orange-100 text-orange-800',
       'Sugerencia': 'bg-green-100 text-green-800',
@@ -298,7 +298,7 @@ export default function PqrsfPage() {
                   onChange={e => setType(e.target.value as PqrsfType)}
                   className="mt-1 block w-full rounded-xl border-gray-300 shadow-sm focus:ring-amber-500 focus:border-amber-500 py-3 px-4 bg-white appearance-none"
                 >
-                  {['Pregunta','Queja','Reclamo','Sugerencia','Felicitación']
+                  {['Petición','Queja','Reclamo','Sugerencia','Felicitación']
                     .map(o => <option key={o}>{o}</option>)}
                 </select>
                 <div className="pointer-events-none absolute inset-y-0 right-0 flex items-center px-3 text-gray-700">

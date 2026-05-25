@@ -1,14 +1,21 @@
 'use client';
 
-import React, { useState } from 'react';
+import React, { useState, Suspense } from 'react';
+import { useSearchParams } from 'next/navigation';
 import DashboardNavbar from '../navbar';
 import { ChevronRight } from 'lucide-react';
 import PermisoForm from './permiso';
 import IncapacidadForm from './incapacidad';
 import VacacionesForm from './vacaciones';
 
-const SolicitudPage = () => {
-  const [requestType, setRequestType] = useState('permiso');
+const VALID_TIPOS = new Set(['permiso', 'incapacidad', 'vacaciones']);
+
+const SolicitudPageInner = () => {
+  const params = useSearchParams();
+  const initialTipo = params.get('tipo');
+  const [requestType, setRequestType] = useState(
+    initialTipo && VALID_TIPOS.has(initialTipo) ? initialTipo : 'permiso'
+  );
 
   const renderForm = () => {
     switch (requestType) {
@@ -83,5 +90,11 @@ const SolicitudPage = () => {
     </div>
   );
 };
+
+const SolicitudPage = () => (
+  <Suspense fallback={null}>
+    <SolicitudPageInner />
+  </Suspense>
+);
 
 export default SolicitudPage;
