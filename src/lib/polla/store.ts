@@ -13,38 +13,44 @@ type PollaLoginResult = {
 };
 
 export async function authenticatePollaUser(
-  cedula: string,
+  identifier: string,
   password: string,
 ): Promise<PollaLoginResult | null> {
   const db = await getDb();
-  // Try main users collection first (fondo members)
-  const mainUser = await db.collection("users").findOne({ cedula });
-  if (mainUser && mainUser.passwordHash) {
-    const valid = await bcrypt.compare(password, mainUser.passwordHash);
-    if (valid) {
-      // Verify fondo membership
-      const fondoMember = await db.collection("fondo_members").findOne({
-        user_id: mainUser._id.toString(),
-        activo: true,
-      });
-      if (fondoMember) {
-        return {
-          cedula: mainUser.cedula,
-          email: mainUser.email ?? "",
-          name: mainUser.nombre ?? mainUser.name ?? "",
-          attemptsAllowed: 10,
-        };
+  const isEmail = identifier.includes("@");
+
+  if (!isEmail) {
+    // Try main users collection first (fondo members) by cedula
+    const mainUser = await db.collection("users").findOne({ cedula: identifier });
+    if (mainUser && mainUser.passwordHash) {
+      const valid = await bcrypt.compare(password, mainUser.passwordHash);
+      if (valid) {
+        const fondoMember = await db.collection("fondo_members").findOne({
+          user_id: mainUser._id.toString(),
+          activo: true,
+        });
+        if (fondoMember) {
+          return {
+            cedula: mainUser.cedula,
+            email: mainUser.email ?? "",
+            name: mainUser.nombre ?? mainUser.name ?? "",
+            attemptsAllowed: 10,
+          };
+        }
       }
     }
   }
-  // Fallback: check polla_users collection
+
+  // Check polla_users by cedula or email
   const pollaCol = await pollaUsersCollection();
-  const pollaUser = await pollaCol.findOne({ cedula });
+  const pollaUser = isEmail
+    ? await pollaCol.findOne({ email: identifier.toLowerCase() })
+    : await pollaCol.findOne({ cedula: identifier });
   if (pollaUser && pollaUser.passwordHash) {
     const valid = await bcrypt.compare(password, pollaUser.passwordHash);
     if (valid) {
       return {
-        cedula: pollaUser.cedula,
+        cedula: pollaUser._id,
         email: pollaUser.email,
         name: pollaUser.name,
         attemptsAllowed: pollaUser.attemptsAllowed,
@@ -82,30 +88,37 @@ export async function getAllMatches(): Promise<MatchDoc[]> {
   return col.find({}).sort({ utcDate: 1 }).toArray();
 }
 
-export async function getPollaUserByCedula(cedula: string): Promise<PollaLoginResult | null> {
+export async function getPollaUserByCedula(identifier: string): Promise<PollaLoginResult | null> {
   const db = await getDb();
-  // Check main users + fondo membership
-  const mainUser = await db.collection("users").findOne({ cedula });
-  if (mainUser) {
-    const fondoMember = await db.collection("fondo_members").findOne({
-      user_id: mainUser._id.toString(),
-      activo: true,
-    });
-    if (fondoMember) {
-      return {
-        cedula: mainUser.cedula,
-        email: mainUser.email ?? "",
-        name: mainUser.nombre ?? "",
-        attemptsAllowed: 10,
-      };
+  const isEmail = identifier.includes("@");
+
+  if (!isEmail) {
+    // Check main users + fondo membership by cedula
+    const mainUser = await db.collection("users").findOne({ cedula: identifier });
+    if (mainUser) {
+      const fondoMember = await db.collection("fondo_members").findOne({
+        user_id: mainUser._id.toString(),
+        activo: true,
+      });
+      if (fondoMember) {
+        return {
+          cedula: mainUser.cedula,
+          email: mainUser.email ?? "",
+          name: mainUser.nombre ?? "",
+          attemptsAllowed: 10,
+        };
+      }
     }
   }
-  // Check polla_users
+
+  // Check polla_users by cedula or email
   const pollaCol = await pollaUsersCollection();
-  const pollaUser = await pollaCol.findOne({ cedula });
+  const pollaUser = isEmail
+    ? await pollaCol.findOne({ email: identifier.toLowerCase() })
+    : await pollaCol.findOne({ cedula: identifier });
   if (pollaUser) {
     return {
-      cedula: pollaUser.cedula,
+      cedula: pollaUser._id,
       email: pollaUser.email,
       name: pollaUser.name,
       attemptsAllowed: pollaUser.attemptsAllowed,
@@ -247,10 +260,11 @@ export async function createPollaUser(input: {
   attemptsAllowed: number;
 }): Promise<PollaUserDoc> {
   const pollaCol = await pollaUsersCollection();
-  await pollaCol.createIndex({ cedula: 1 }, { unique: true });
+  await pollaCol.createIndex({ email: 1 });
   const passwordHash = await bcrypt.hash(input.password, 10);
+  const uid = input.cedula || input.email.trim().toLowerCase();
   const doc: PollaUserDoc = {
-    _id: input.cedula,
+    _id: uid,
     cedula: input.cedula,
     email: input.email.trim().toLowerCase(),
     name: input.name.trim(),

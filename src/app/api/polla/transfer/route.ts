@@ -7,11 +7,12 @@ export const dynamic = "force-dynamic";
 export async function POST(request: Request) {
   let body: {
     giverCedula: string;
-    recipientCedula: string;
+    recipientCedula?: string;
     createNew?: boolean;
     newName?: string;
     newPassword?: string;
     newEmail?: string;
+    newCedula?: string;
   };
   try {
     body = await request.json();
@@ -20,13 +21,8 @@ export async function POST(request: Request) {
   }
 
   const giverCedula = (body.giverCedula ?? "").trim();
-  const recipientCedula = (body.recipientCedula ?? "").trim();
-
-  if (!giverCedula || !recipientCedula) {
-    return NextResponse.json({ error: "Missing cedula" }, { status: 400 });
-  }
-  if (giverCedula === recipientCedula) {
-    return NextResponse.json({ error: "Cannot transfer to yourself" }, { status: 400 });
+  if (!giverCedula) {
+    return NextResponse.json({ error: "Missing giver" }, { status: 400 });
   }
 
   // Verify giver exists and has attempts to spare
@@ -39,30 +35,61 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "No tienes intentos disponibles para regalar. Debes conservar al menos 1." }, { status: 400 });
   }
 
-  // Handle recipient
-  let recipient = await getPollaUserByCedula(recipientCedula);
-  if (!recipient && body.createNew) {
+  let recipientUid: string;
+
+  if (body.createNew) {
+    const email = (body.newEmail ?? "").trim().toLowerCase();
+    const cedula = (body.newCedula ?? "").trim();
     const name = (body.newName ?? "").trim();
     const password = body.newPassword ?? "";
+
+    if (!email) {
+      return NextResponse.json({ error: "El correo es obligatorio para crear un usuario nuevo" }, { status: 400 });
+    }
     if (!name) {
       return NextResponse.json({ error: "Name is required for new user" }, { status: 400 });
     }
     if (!password || password.length < 4) {
       return NextResponse.json({ error: "Password must be at least 4 characters" }, { status: 400 });
     }
+
+    recipientUid = cedula || email;
+
+    // Check if user already exists by email or cedula
+    const existingByEmail = await getPollaUserByCedula(email);
+    const existingByCedula = cedula ? await getPollaUserByCedula(cedula) : null;
+    if (existingByEmail || existingByCedula) {
+      return NextResponse.json({ error: "Ya existe un usuario con ese correo o cédula." }, { status: 409 });
+    }
+
+    if (recipientUid === giverCedula) {
+      return NextResponse.json({ error: "Cannot transfer to yourself" }, { status: 400 });
+    }
+
     await createPollaUser({
-      cedula: recipientCedula,
-      email: (body.newEmail ?? "").trim().toLowerCase(),
+      cedula,
+      email,
       name,
       password,
-      attemptsAllowed: 0, // Start with 0, the transfer will add 1
+      attemptsAllowed: 0,
     });
-    recipient = await getPollaUserByCedula(recipientCedula);
+  } else {
+    const recipientIdentifier = (body.recipientCedula ?? "").trim();
+    if (!recipientIdentifier) {
+      return NextResponse.json({ error: "Ingresa la cédula o correo del destinatario" }, { status: 400 });
+    }
+    if (recipientIdentifier === giverCedula) {
+      return NextResponse.json({ error: "Cannot transfer to yourself" }, { status: 400 });
+    }
+    recipientUid = recipientIdentifier;
   }
 
+  const recipient = await getPollaUserByCedula(recipientUid);
   if (!recipient) {
-    return NextResponse.json({ error: "Recipient not found. Check the cedula or create a new user." }, { status: 404 });
+    return NextResponse.json({ error: "No encontramos al destinatario. Verifica la cédula o correo, o crea un usuario nuevo." }, { status: 404 });
   }
+  // Use the canonical uid from the looked-up recipient
+  recipientUid = recipient.cedula;
 
   // Record adjustments
   const db = await getDb();
@@ -70,12 +97,12 @@ export async function POST(request: Request) {
   await db.collection("polla_attempt_adjustments").insertOne({
     cedula: giverCedula,
     delta: -1,
-    reason: `Gifted to ${recipientCedula}`,
-    counterpart: recipientCedula,
+    reason: `Gifted to ${recipientUid}`,
+    counterpart: recipientUid,
     createdAt: now,
   });
   await db.collection("polla_attempt_adjustments").insertOne({
-    cedula: recipientCedula,
+    cedula: recipientUid,
     delta: 1,
     reason: `Received from ${giverCedula}`,
     counterpart: giverCedula,
@@ -83,11 +110,11 @@ export async function POST(request: Request) {
   });
 
   const newGiverAttempts = await getEffectiveAttempts(giverCedula);
-  const newRecipientAttempts = await getEffectiveAttempts(recipientCedula);
+  const newRecipientAttempts = await getEffectiveAttempts(recipientUid);
 
   return NextResponse.json({
     success: true,
     giver: { cedula: giverCedula, attemptsRemaining: newGiverAttempts },
-    recipient: { cedula: recipientCedula, name: recipient.name, attemptsNow: newRecipientAttempts },
+    recipient: { cedula: recipientUid, name: recipient.name, attemptsNow: newRecipientAttempts },
   });
 }

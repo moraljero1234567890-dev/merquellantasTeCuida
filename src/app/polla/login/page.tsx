@@ -32,7 +32,7 @@ export default function PollaLoginPage() {
 
     const trimmedCedula = cedula.trim();
     if (!trimmedCedula) {
-      setError("Ingresa tu cédula.");
+      setError("Ingresa tu cédula o correo.");
       return;
     }
     if (!password) {
@@ -130,8 +130,8 @@ export default function PollaLoginPage() {
               pronósticos.
             </h2>
             <p className="mt-5 text-white/75">
-              Ingresa con tu cédula y contraseña registrados con tu asesor
-              Merquellantas. Si no recuerdas tus datos, tu asesor puede
+              Ingresa con tu cédula o correo y contraseña registrados con tu
+              asesor Merquellantas. Si no recuerdas tus datos, tu asesor puede
               entregártelos de nuevo.
             </p>
           </div>
@@ -168,7 +168,7 @@ export default function PollaLoginPage() {
               Bienvenido de vuelta.
             </h1>
             <p className="mt-3 text-[var(--foreground-soft)]">
-              Ingresa con tu cédula y contraseña para entrar.
+              Ingresa con tu cédula o correo y contraseña para entrar.
             </p>
 
             <form
@@ -181,19 +181,18 @@ export default function PollaLoginPage() {
                   htmlFor="cedula"
                   className="font-mono text-[11px] font-semibold uppercase tracking-[0.28em] text-[var(--foreground-muted)]"
                 >
-                  Cédula
+                  Cédula o correo
                 </label>
                 <input
                   id="cedula"
                   name="cedula"
                   type="text"
-                  inputMode="numeric"
                   autoComplete="username"
                   required
                   value={cedula}
-                  onChange={(e) => setCedula(e.target.value.replace(/[^0-9]/g, ""))}
-                  placeholder="1234567890"
-                  className="mt-2 h-12 w-full border border-[var(--line)] bg-white px-4 font-mono text-base tabular-nums text-[var(--foreground)] outline-none transition focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
+                  onChange={(e) => setCedula(e.target.value)}
+                  placeholder="1234567890 o correo@ejemplo.com"
+                  className="mt-2 h-12 w-full border border-[var(--line)] bg-white px-4 text-base text-[var(--foreground)] outline-none transition focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
                 />
               </div>
 

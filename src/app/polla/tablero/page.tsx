@@ -64,13 +64,15 @@ export default function PollaDashboardPage() {
     try {
       const body: Record<string, unknown> = {
         giverCedula: session.cedula,
-        recipientCedula: giftCedula.trim(),
       };
-      if (giftMode === "new") {
+      if (giftMode === "existing") {
+        body.recipientCedula = giftCedula.trim();
+      } else {
         body.createNew = true;
+        body.newEmail = giftEmail.trim();
         body.newName = giftName.trim();
         body.newPassword = giftPassword;
-        body.newEmail = giftEmail.trim();
+        if (giftCedula.trim()) body.newCedula = giftCedula.trim();
       }
       const res = await fetch("/api/polla/transfer", {
         method: "POST",
@@ -318,22 +320,33 @@ export default function PollaDashboardPage() {
             </div>
 
             <div className="mt-5 space-y-4">
-              <label className="block">
-                <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-[var(--foreground-muted)]">
-                  Cédula del destinatario
-                </span>
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  value={giftCedula}
-                  onChange={(e) => setGiftCedula(e.target.value.replace(/\D/g, ""))}
-                  placeholder="Ej. 1023456789"
-                  className="mt-1 h-11 w-full border border-[var(--line)] bg-white px-3 font-mono tabular-nums outline-none focus:border-[var(--brand)]"
-                />
-              </label>
-
-              {giftMode === "new" && (
+              {giftMode === "existing" ? (
+                <label className="block">
+                  <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-[var(--foreground-muted)]">
+                    Cédula o correo del destinatario
+                  </span>
+                  <input
+                    type="text"
+                    value={giftCedula}
+                    onChange={(e) => setGiftCedula(e.target.value)}
+                    placeholder="Ej. 1023456789 o correo@ejemplo.com"
+                    className="mt-1 h-11 w-full border border-[var(--line)] bg-white px-3 outline-none focus:border-[var(--brand)]"
+                  />
+                </label>
+              ) : (
                 <>
+                  <label className="block">
+                    <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-[var(--foreground-muted)]">
+                      Correo del destinatario
+                    </span>
+                    <input
+                      type="email"
+                      value={giftEmail}
+                      onChange={(e) => setGiftEmail(e.target.value)}
+                      placeholder="correo@ejemplo.com"
+                      className="mt-1 h-11 w-full border border-[var(--line)] bg-white px-3 outline-none focus:border-[var(--brand)]"
+                    />
+                  </label>
                   <label className="block">
                     <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-[var(--foreground-muted)]">
                       Nombre completo
@@ -360,14 +373,15 @@ export default function PollaDashboardPage() {
                   </label>
                   <label className="block">
                     <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-[var(--foreground-muted)]">
-                      Correo (opcional)
+                      Cédula (opcional)
                     </span>
                     <input
-                      type="email"
-                      value={giftEmail}
-                      onChange={(e) => setGiftEmail(e.target.value)}
-                      placeholder="correo@ejemplo.com"
-                      className="mt-1 h-11 w-full border border-[var(--line)] bg-white px-3 outline-none focus:border-[var(--brand)]"
+                      type="text"
+                      inputMode="numeric"
+                      value={giftCedula}
+                      onChange={(e) => setGiftCedula(e.target.value.replace(/\D/g, ""))}
+                      placeholder="Solo si aplica"
+                      className="mt-1 h-11 w-full border border-[var(--line)] bg-white px-3 font-mono tabular-nums outline-none focus:border-[var(--brand)]"
                     />
                   </label>
                 </>
@@ -398,7 +412,7 @@ export default function PollaDashboardPage() {
               <button
                 type="button"
                 onClick={handleGift}
-                disabled={giftSending || !giftCedula.trim() || (giftMode === "new" && (!giftName.trim() || giftPassword.length < 4))}
+                disabled={giftSending || (giftMode === "existing" ? !giftCedula.trim() : (!giftEmail.trim() || !giftName.trim() || giftPassword.length < 4))}
                 className="flex-1 bg-[var(--brand)] py-2.5 text-sm font-semibold text-white transition hover:bg-[var(--brand-dark)] disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {giftSending ? "Transfiriendo..." : "Regalar intento"}
