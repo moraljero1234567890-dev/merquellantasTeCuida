@@ -12,7 +12,7 @@ const ALLOWED_USER_FIELDS = new Set([
   'first_name', 'primer_apellido', 'segundo_apellido',
 ]);
 const ADMIN_ONLY_FIELDS = new Set(['rol', 'cedula', 'email']);
-const VALID_ROLES = new Set(['user', 'admin', 'fondo']);
+const VALID_ROLES = new Set(['user', 'admin', 'fondo', 'externo']);
 
 // GET /api/users
 export async function GET() {

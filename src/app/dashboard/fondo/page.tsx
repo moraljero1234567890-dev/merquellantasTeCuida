@@ -2357,6 +2357,7 @@ function BuscarAfiliadoTab() {
 /* ================================================================== */
 
 function NuevoAfiliadoTab() {
+  const [mode, setMode] = useState<"interno" | "externo">("interno");
   const [searchQuery, setSearchQuery] = useState("");
   const [searchResults, setSearchResults] = useState<SearchUser[]>([]);
   const [searching, setSearching] = useState(false);
@@ -2368,6 +2369,21 @@ function NuevoAfiliadoTab() {
   const [submitting, setSubmitting] = useState(false);
   const [success, setSuccess] = useState(false);
   const [error, setError] = useState("");
+
+  // External user fields
+  const [extNombre, setExtNombre] = useState("");
+  const [extCedula, setExtCedula] = useState("");
+  const [extEmail, setExtEmail] = useState("");
+
+  const resetForm = () => {
+    setSelectedUser(null);
+    setMontoAporte("");
+    setSearchQuery("");
+    setSearchResults([]);
+    setExtNombre("");
+    setExtCedula("");
+    setExtEmail("");
+  };
 
   const handleSearch = async () => {
     if (!searchQuery.trim()) return;
@@ -2383,29 +2399,42 @@ function NuevoAfiliadoTab() {
   };
 
   const handleSubmit = async () => {
-    if (!selectedUser || !montoAporte) return;
     setSubmitting(true);
     setError("");
     setSuccess(false);
     try {
-      const res = await fetch("/api/fondo/members", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      let payload: Record<string, unknown>;
+
+      if (mode === "externo") {
+        if (!extCedula.trim() || !extNombre.trim() || !montoAporte) return;
+        payload = {
+          createExternal: true,
+          cedula: extCedula.trim(),
+          nombre: extNombre.trim(),
+          email: extEmail.trim() || undefined,
+          monto_aporte: Number(montoAporte),
+          frecuencia,
+        };
+      } else {
+        if (!selectedUser || !montoAporte) return;
+        payload = {
           user_id: selectedUser.id,
           monto_aporte: Number(montoAporte),
           frecuencia,
-        }),
+        };
+      }
+
+      const res = await fetch("/api/fondo/members", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
       });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || "Error al crear afiliado");
       }
       setSuccess(true);
-      setSelectedUser(null);
-      setMontoAporte("");
-      setSearchQuery("");
-      setSearchResults([]);
+      resetForm();
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Error desconocido");
     } finally {
@@ -2421,11 +2450,35 @@ function NuevoAfiliadoTab() {
           Nuevo Afiliado
         </h2>
         <p className="text-sm text-gray-500 mt-1">
-          Busca un usuario existente y enrollalo en Fonalmerque.
+          Enrolla un empleado existente o crea un usuario externo para Fonalmerque.
         </p>
       </div>
 
       <div className="p-5 sm:p-6 space-y-6">
+        {/* Mode toggle */}
+        <div className="flex gap-2">
+          <button
+            onClick={() => { setMode("interno"); resetForm(); setSuccess(false); setError(""); }}
+            className={`flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+              mode === "interno"
+                ? "bg-gray-900 text-white shadow-sm"
+                : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+            }`}
+          >
+            Empleado existente
+          </button>
+          <button
+            onClick={() => { setMode("externo"); resetForm(); setSuccess(false); setError(""); }}
+            className={`flex-1 py-2.5 rounded-xl text-sm font-semibold transition-all ${
+              mode === "externo"
+                ? "bg-gray-900 text-white shadow-sm"
+                : "bg-gray-100 text-gray-600 hover:bg-gray-200"
+            }`}
+          >
+            Persona externa
+          </button>
+        </div>
+
         {/* Messages */}
         {error && (
           <div className="p-3 rounded-xl bg-red-50 border border-red-200 text-red-700 text-sm flex items-center gap-2">
@@ -2434,93 +2487,190 @@ function NuevoAfiliadoTab() {
         )}
         {success && (
           <div className="p-3 rounded-xl bg-green-50 border border-green-200 text-green-700 text-sm flex items-center gap-2">
-            <Check size={16} /> Afiliado creado exitosamente.
+            <Check size={16} />
+            {mode === "externo"
+              ? "Usuario externo creado y afiliado al fondo. La contraseña son los últimos 8 dígitos de la cédula."
+              : "Afiliado creado exitosamente."}
           </div>
         )}
 
-        {/* Step 1: Search user */}
-        <div>
-          <label className="block text-sm font-semibold text-gray-700 mb-2">
-            1. Buscar Usuario
-          </label>
-          <div className="flex gap-3">
-            <div className="relative flex-1">
-              <Search
-                size={16}
-                className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
-              />
-              <input
-                type="text"
-                placeholder="Buscar por nombre o cédula..."
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={(e) => e.key === "Enter" && handleSearch()}
-                className="w-full pl-9 pr-4 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#f4a900]/40 focus:border-[#f4a900]"
-              />
-            </div>
-            <button
-              onClick={handleSearch}
-              disabled={searching}
-              className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gray-900 text-white font-semibold text-sm hover:bg-gray-800 disabled:opacity-50 transition-all"
-            >
-              {searching ? (
-                <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full" />
-              ) : (
-                <Search size={16} />
-              )}
-              Buscar
-            </button>
-          </div>
-
-          {searchResults.length > 0 && !selectedUser && (
-            <div className="mt-3 divide-y divide-gray-100 rounded-xl border border-gray-200 overflow-hidden">
-              {searchResults.map((u) => (
+        {mode === "interno" ? (
+          <>
+            {/* Step 1: Search user */}
+            <div>
+              <label className="block text-sm font-semibold text-gray-700 mb-2">
+                1. Buscar Usuario
+              </label>
+              <div className="flex gap-3">
+                <div className="relative flex-1">
+                  <Search
+                    size={16}
+                    className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400"
+                  />
+                  <input
+                    type="text"
+                    placeholder="Buscar por nombre o cédula..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    onKeyDown={(e) => e.key === "Enter" && handleSearch()}
+                    className="w-full pl-9 pr-4 py-2.5 rounded-xl border border-gray-200 text-sm focus:outline-none focus:ring-2 focus:ring-[#f4a900]/40 focus:border-[#f4a900]"
+                  />
+                </div>
                 <button
-                  key={u.id}
-                  onClick={() => setSelectedUser(u)}
-                  className="w-full flex items-center justify-between px-4 py-3 hover:bg-[#f4a900]/[0.04] transition-colors text-left"
+                  onClick={handleSearch}
+                  disabled={searching}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gray-900 text-white font-semibold text-sm hover:bg-gray-800 disabled:opacity-50 transition-all"
                 >
-                  <div>
-                    <p className="font-medium text-gray-900">{u.nombre}</p>
-                    <p className="text-xs text-gray-500">CC: {u.cedula}</p>
-                  </div>
-                  <ChevronRight size={16} className="text-gray-400" />
+                  {searching ? (
+                    <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full" />
+                  ) : (
+                    <Search size={16} />
+                  )}
+                  Buscar
                 </button>
-              ))}
-            </div>
-          )}
-
-          {selectedUser && (
-            <div className="mt-3 flex items-center gap-3 p-3 rounded-xl bg-[#f4a900]/[0.06] border border-[#f4a900]/20">
-              <Users size={18} className="text-[#f4a900]" />
-              <div className="flex-1">
-                <p className="font-semibold text-gray-900 text-sm">
-                  {selectedUser.nombre}
-                </p>
-                <p className="text-xs text-gray-500">
-                  CC: {selectedUser.cedula}
-                </p>
               </div>
-              <button
-                onClick={() => setSelectedUser(null)}
-                className="p-1 rounded-lg hover:bg-white text-gray-400 transition-colors"
-              >
-                <X size={16} />
-              </button>
-            </div>
-          )}
-        </div>
 
-        {/* Step 2: Configure */}
-        {selectedUser && (
+              {searchResults.length > 0 && !selectedUser && (
+                <div className="mt-3 divide-y divide-gray-100 rounded-xl border border-gray-200 overflow-hidden">
+                  {searchResults.map((u) => (
+                    <button
+                      key={u.id}
+                      onClick={() => setSelectedUser(u)}
+                      className="w-full flex items-center justify-between px-4 py-3 hover:bg-[#f4a900]/[0.04] transition-colors text-left"
+                    >
+                      <div>
+                        <p className="font-medium text-gray-900">{u.nombre}</p>
+                        <p className="text-xs text-gray-500">CC: {u.cedula}</p>
+                      </div>
+                      <ChevronRight size={16} className="text-gray-400" />
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {selectedUser && (
+                <div className="mt-3 flex items-center gap-3 p-3 rounded-xl bg-[#f4a900]/[0.06] border border-[#f4a900]/20">
+                  <Users size={18} className="text-[#f4a900]" />
+                  <div className="flex-1">
+                    <p className="font-semibold text-gray-900 text-sm">
+                      {selectedUser.nombre}
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      CC: {selectedUser.cedula}
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => setSelectedUser(null)}
+                    className="p-1 rounded-lg hover:bg-white text-gray-400 transition-colors"
+                  >
+                    <X size={16} />
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {/* Step 2: Configure */}
+            {selectedUser && (
+              <div className="space-y-4">
+                <label className="block text-sm font-semibold text-gray-700">
+                  2. Configurar Aporte
+                </label>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">
+                      Monto del Aporte ($)
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={montoAporte}
+                      onChange={(e) => setMontoAporte(e.target.value)}
+                      placeholder="Ej: 100000"
+                      className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#f4a900]/40 focus:border-[#f4a900]"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-500 mb-1">
+                      Frecuencia
+                    </label>
+                    <select
+                      value={frecuencia}
+                      onChange={(e) =>
+                        setFrecuencia(
+                          e.target.value as "quincenal" | "mensual"
+                        )
+                      }
+                      className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#f4a900]/40 focus:border-[#f4a900] bg-white"
+                    >
+                      <option value="quincenal">Quincenal</option>
+                      <option value="mensual">Mensual</option>
+                    </select>
+                  </div>
+                </div>
+
+                <button
+                  onClick={handleSubmit}
+                  disabled={submitting || !montoAporte}
+                  className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-[#f4a900] text-white font-semibold text-sm shadow-md shadow-[#f4a900]/25 hover:bg-[#e68a00] disabled:opacity-50 transition-all"
+                >
+                  {submitting ? (
+                    <div className="animate-spin h-4 w-4 border-2 border-white border-t-transparent rounded-full" />
+                  ) : (
+                    <UserPlus size={16} />
+                  )}
+                  Crear Afiliado
+                </button>
+              </div>
+            )}
+          </>
+        ) : (
+          /* External user creation form */
           <div className="space-y-4">
-            <label className="block text-sm font-semibold text-gray-700">
-              2. Configurar Aporte
-            </label>
+            <div className="p-3 rounded-xl bg-blue-50 border border-blue-200 text-blue-700 text-sm">
+              Este usuario solo tendrá acceso al fondo y a la polla. No podrá ver nómina, cesantías, permisos ni otras secciones.
+            </div>
+
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <label className="block text-xs font-medium text-gray-500 mb-1">
-                  Monto del Aporte ($)
+                  Nombre completo *
+                </label>
+                <input
+                  type="text"
+                  value={extNombre}
+                  onChange={(e) => setExtNombre(e.target.value)}
+                  placeholder="Nombre del usuario"
+                  className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#f4a900]/40 focus:border-[#f4a900]"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">
+                  Cédula *
+                </label>
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  value={extCedula}
+                  onChange={(e) => setExtCedula(e.target.value.replace(/\D/g, ""))}
+                  placeholder="Ej: 1023456789"
+                  className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm font-mono focus:outline-none focus:ring-2 focus:ring-[#f4a900]/40 focus:border-[#f4a900]"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">
+                  Correo (opcional)
+                </label>
+                <input
+                  type="email"
+                  value={extEmail}
+                  onChange={(e) => setExtEmail(e.target.value)}
+                  placeholder="correo@ejemplo.com"
+                  className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#f4a900]/40 focus:border-[#f4a900]"
+                />
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-gray-500 mb-1">
+                  Monto del Aporte ($) *
                 </label>
                 <input
                   type="number"
@@ -2538,9 +2688,7 @@ function NuevoAfiliadoTab() {
                 <select
                   value={frecuencia}
                   onChange={(e) =>
-                    setFrecuencia(
-                      e.target.value as "quincenal" | "mensual"
-                    )
+                    setFrecuencia(e.target.value as "quincenal" | "mensual")
                   }
                   className="w-full rounded-xl border border-gray-200 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#f4a900]/40 focus:border-[#f4a900] bg-white"
                 >
@@ -2552,7 +2700,7 @@ function NuevoAfiliadoTab() {
 
             <button
               onClick={handleSubmit}
-              disabled={submitting || !montoAporte}
+              disabled={submitting || !extCedula.trim() || !extNombre.trim() || !montoAporte}
               className="inline-flex items-center gap-2 px-6 py-2.5 rounded-xl bg-[#f4a900] text-white font-semibold text-sm shadow-md shadow-[#f4a900]/25 hover:bg-[#e68a00] disabled:opacity-50 transition-all"
             >
               {submitting ? (
@@ -2560,7 +2708,7 @@ function NuevoAfiliadoTab() {
               ) : (
                 <UserPlus size={16} />
               )}
-              Crear Afiliado
+              Crear Usuario Externo
             </button>
           </div>
         )}

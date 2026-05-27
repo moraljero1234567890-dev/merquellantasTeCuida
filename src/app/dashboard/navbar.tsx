@@ -39,7 +39,7 @@ const DashboardNavbar = ({ activePage = 'home' }) => {
   }, [isProfileOpen]);
 
   // Navigation items configuration
-  const navItems = [
+  const allNavItems = [
     { id: 'home', href: '/dashboard', icon: <Home size={18} />, label: 'Inicio' },
     { id: 'cesantias', href: '/dashboard/cesantias', icon: <HeartPlus size={18} />, label: 'Cesantías' },
     { id: 'permisos', href: '/dashboard/solicitud', icon: <Palmtree size={18} />, label: 'Permisos' },
@@ -48,6 +48,10 @@ const DashboardNavbar = ({ activePage = 'home' }) => {
     { id: 'fondo', href: '/dashboard/fondo', icon: <Landmark size={18} />, label: 'Fonalmerque' },
     { id: 'elearning', href: '/dashboard/elearning', icon: <GraduationCap size={18} />, label: 'E-Learning' },
   ];
+
+  const navItems = profile?.rol === 'externo'
+    ? allNavItems.filter((item) => item.id === 'fondo')
+    : allNavItems;
 
   return (
     <div>

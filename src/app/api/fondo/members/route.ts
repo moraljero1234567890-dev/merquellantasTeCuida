@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '../../../../lib/db';
 import { ObjectId } from 'mongodb';
+import bcrypt from 'bcryptjs';
 import { auth } from '../../../../lib/auth';
 
 function escapeRegex(s: string): string {
@@ -18,7 +19,7 @@ export async function GET(req: NextRequest) {
   const searchUsers = searchParams.get('search_users');
   const includeCiclo = searchParams.get('include_ciclo') === '1';
 
-  // Regular users only see themselves
+  // Regular/external users only see themselves
   if (session.user.rol !== 'fondo' && session.user.rol !== 'admin') {
     const member = await db.collection('fondo_members').findOne({ user_id: session.user.id });
     return NextResponse.json(member || null);
@@ -164,14 +165,67 @@ export async function POST(req: NextRequest) {
   }
 
   const body = await req.json();
+  const validFrecuencias = ['quincenal', 'mensual'];
+  const frecuencia = validFrecuencias.includes(body.frecuencia) ? body.frecuencia : 'mensual';
+  const db = await getDb();
+
+  // Create external user + enroll in one step
+  if (body.createExternal) {
+    const cedula = String(body.cedula ?? '').trim();
+    const nombre = String(body.nombre ?? '').trim();
+    if (!cedula || !nombre) {
+      return NextResponse.json({ error: 'Cédula y nombre son requeridos' }, { status: 400 });
+    }
+    if (!body.monto_aporte) {
+      return NextResponse.json({ error: 'Monto de aporte requerido' }, { status: 400 });
+    }
+
+    const existingUser = await db.collection('users').findOne({ cedula });
+    if (existingUser) {
+      return NextResponse.json({ error: 'Ya existe un usuario con esa cédula' }, { status: 400 });
+    }
+
+    const email = body.email || `${cedula}@merque.com`;
+    const password = cedula.slice(-8);
+    const passwordHash = await bcrypt.hash(password, 10);
+
+    const userResult = await db.collection('users').insertOne({
+      cedula,
+      nombre,
+      email,
+      rol: 'externo',
+      passwordHash,
+      departamento: null,
+      cargo_empleado: null,
+      created_at: new Date(),
+    });
+
+    const userId = userResult.insertedId.toString();
+
+    const memberResult = await db.collection('fondo_members').insertOne({
+      user_id: userId,
+      fecha_afiliacion: new Date(),
+      activo: true,
+      frecuencia,
+      monto_aporte: Number(body.monto_aporte),
+      saldo_permanente: 0,
+      saldo_social: 0,
+      saldo_actividad: 0,
+      saldo_intereses: 0,
+      created_at: new Date(),
+    });
+
+    return NextResponse.json({
+      success: true,
+      id: memberResult.insertedId.toString(),
+      userId,
+    });
+  }
+
+  // Standard enrollment of existing user
   if (!body.user_id || !body.monto_aporte) {
     return NextResponse.json({ error: 'user_id y monto_aporte requeridos' }, { status: 400 });
   }
-
-  const validFrecuencias = ['quincenal', 'mensual'];
-  const frecuencia = validFrecuencias.includes(body.frecuencia) ? body.frecuencia : 'mensual';
-
-  const db = await getDb();
 
   // Check if already enrolled
   const existing = await db.collection('fondo_members').findOne({ user_id: body.user_id });
