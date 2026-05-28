@@ -1760,7 +1760,7 @@ useEffect(() => {
                         const hasResponse = !!p.respuesta;
                         const accentClass = hasResponse ? 'border-l-emerald-500' : 'border-l-amber-500';
                         const typeColors: Record<string, string> = {
-                          'Pregunta': 'bg-blue-100 text-blue-700',
+                          'Petición': 'bg-blue-100 text-blue-700',
                           'Queja': 'bg-red-100 text-red-700',
                           'Reclamo': 'bg-orange-100 text-orange-700',
                           'Sugerencia': 'bg-green-100 text-green-700',
@@ -1839,7 +1839,7 @@ useEffect(() => {
           const dt = new Date(sp.created_at);
           const respDt = sp.respondido_at ? new Date(sp.respondido_at) : null;
           const typeColors: Record<string, string> = {
-            'Pregunta': 'bg-blue-100 text-blue-700',
+            'Petición': 'bg-blue-100 text-blue-700',
             'Queja': 'bg-red-100 text-red-700',
             'Reclamo': 'bg-orange-100 text-orange-700',
             'Sugerencia': 'bg-green-100 text-green-700',

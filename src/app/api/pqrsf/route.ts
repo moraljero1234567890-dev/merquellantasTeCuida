@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
   const body = await req.json();
 
   // Input validation
-  const validTypes = ['Pregunta', 'Queja', 'Reclamo', 'Sugerencia', 'Felicitación'];
+  const validTypes = ['Petición', 'Queja', 'Reclamo', 'Sugerencia', 'Felicitación'];
   if (!body.type || !validTypes.includes(body.type)) {
     return NextResponse.json({ error: 'Tipo de PQRSF inválido' }, { status: 400 });
   }

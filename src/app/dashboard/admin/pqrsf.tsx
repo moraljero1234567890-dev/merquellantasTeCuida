@@ -64,7 +64,7 @@ export default function PQRSFCard() {
 
   const getTypeColor = (type: string) => {
     const colors: Record<string, string> = {
-      'Pregunta': 'bg-blue-100 text-blue-800',
+      'Petición': 'bg-blue-100 text-blue-800',
       'Queja': 'bg-red-100 text-red-800',
       'Reclamo': 'bg-orange-100 text-orange-800',
       'Sugerencia': 'bg-green-100 text-green-800',
