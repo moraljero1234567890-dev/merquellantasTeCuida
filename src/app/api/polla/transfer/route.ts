@@ -25,6 +25,29 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Missing giver" }, { status: 400 });
   }
 
+  try {
+    return await handleTransfer(body, giverCedula);
+  } catch (err) {
+    console.error("polla/transfer failed:", err);
+    return NextResponse.json(
+      { error: "No pudimos completar la transferencia. Intenta de nuevo." },
+      { status: 500 },
+    );
+  }
+}
+
+async function handleTransfer(
+  body: {
+    giverCedula: string;
+    recipientCedula?: string;
+    createNew?: boolean;
+    newName?: string;
+    newPassword?: string;
+    newEmail?: string;
+    newCedula?: string;
+  },
+  giverCedula: string,
+) {
   // Verify giver exists and has attempts to spare
   const giver = await getPollaUserByCedula(giverCedula);
   if (!giver) {

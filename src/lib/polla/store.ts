@@ -261,6 +261,12 @@ export async function createPollaUser(input: {
 }): Promise<PollaUserDoc> {
   const pollaCol = await pollaUsersCollection();
   await pollaCol.createIndex({ email: 1 });
+  // Unique on cedula only for non-empty values, so multiple email-only users
+  // (cedula === "") can coexist without tripping a duplicate-key error.
+  await pollaCol.createIndex(
+    { cedula: 1 },
+    { unique: true, partialFilterExpression: { cedula: { $gt: "" } } },
+  );
   const passwordHash = await bcrypt.hash(input.password, 10);
   const uid = input.cedula || input.email.trim().toLowerCase();
   const doc: PollaUserDoc = {
