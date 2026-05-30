@@ -418,11 +418,11 @@ export default function PollaPredictPage() {
 
   useEffect(() => {
     if (!session) return;
-    if (
-      !Number.isInteger(attemptNum) ||
-      attemptNum < 1 ||
-      attemptNum > session.attemptsAllowed
-    ) {
+    // Basic sanity only. The real quota -- which includes gifted attempts
+    // tracked in polla_attempt_adjustments, not in the cached session -- is
+    // enforced server-side. Guarding on session.attemptsAllowed here would
+    // bounce recipients of gifted attempts straight back to the dashboard.
+    if (!Number.isInteger(attemptNum) || attemptNum < 1 || attemptNum > 20) {
       router.replace("/polla/tablero");
     }
   }, [session, router, attemptNum]);
@@ -431,13 +431,24 @@ export default function PollaPredictPage() {
     if (!session) return;
     let cancelled = false;
     setLoading(true);
-    Promise.all([
-      fetch("/api/polla/matches").then((r) => r.json()),
-      fetch(
-        `/api/polla/predictions/${attemptNum}?cedula=${encodeURIComponent(session.cedula)}`,
-      ).then((r) => r.json()),
-    ])
-      .then(([m, p]) => {
+    (async () => {
+      try {
+        const [mRes, pRes] = await Promise.all([
+          fetch("/api/polla/matches"),
+          fetch(
+            `/api/polla/predictions/${attemptNum}?cedula=${encodeURIComponent(session.cedula)}`,
+          ),
+        ]);
+        if (cancelled) return;
+        // Server rejected this attempt (e.g. out of quota / unknown user).
+        if (!pRes.ok) {
+          if (pRes.status === 403 || pRes.status === 404) {
+            router.replace("/polla/tablero");
+            return;
+          }
+          throw new Error(`prediction fetch failed: ${pRes.status}`);
+        }
+        const [m, p] = await Promise.all([mRes.json(), pRes.json()]);
         if (cancelled) return;
         const arr: ApiMatch[] = Array.isArray(m.matches)
           ? m.matches
@@ -447,18 +458,16 @@ export default function PollaPredictPage() {
         setGroupDrafts(p.prediction?.groupScores ?? {});
         if (p.lockStatus) setLockStatus(p.lockStatus);
         setError(null);
-      })
-      .catch(() => {
-        if (cancelled) return;
-        setError("No pudimos cargar tu pronóstico.");
-      })
-      .finally(() => {
+      } catch {
+        if (!cancelled) setError("No pudimos cargar tu pronóstico.");
+      } finally {
         if (!cancelled) setLoading(false);
-      });
+      }
+    })();
     return () => {
       cancelled = true;
     };
-  }, [session, attemptNum]);
+  }, [session, attemptNum, router]);
 
   const groupMatches = useMemo(
     () => matches.filter((m) => m.stage === "GROUP_STAGE" && m.group),
