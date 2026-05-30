@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { signOut } from "next-auth/react";
 import { readPollaSession, writePollaSession, clearPollaSession, type PollaSession } from "./session";
 
 export function usePollaAuth(options?: { redirect?: boolean }) {
@@ -34,8 +35,15 @@ export function usePollaAuth(options?: { redirect?: boolean }) {
       .finally(() => setChecked(true));
   }, [router, shouldRedirect]);
 
-  function logout() {
+  async function logout() {
     clearPollaSession();
+    // Also end the dashboard (NextAuth) session so logging out of the polla
+    // logs the user out of everything. No-op for polla-only users.
+    try {
+      await signOut({ redirect: false });
+    } catch {
+      /* no dashboard session to clear */
+    }
     router.replace("/polla/login");
   }
 

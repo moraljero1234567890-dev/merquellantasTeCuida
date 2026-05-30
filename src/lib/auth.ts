@@ -12,15 +12,20 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         password: { label: 'Contraseña', type: 'password' },
       },
       async authorize(credentials) {
-        const cedula = credentials?.cedula as string | undefined;
+        const identifier = credentials?.cedula as string | undefined;
         const password = credentials?.password as string | undefined;
 
-        if (!cedula || !password) return null;
+        if (!identifier || !password) return null;
 
         const db = await getDb();
-        const user = await db.collection('users').findOne({ cedula: String(cedula) });
+        // Accept either a cédula or an email so the polla login can establish a
+        // dashboard session with whatever identifier the user typed there.
+        const id = String(identifier).trim();
+        const user = id.includes('@')
+          ? await db.collection('users').findOne({ email: id.toLowerCase() })
+          : await db.collection('users').findOne({ cedula: id });
 
-        if (!user) return null;
+        if (!user || !user.passwordHash) return null;
 
         const valid = await bcrypt.compare(password, user.passwordHash);
         if (!valid) return null;

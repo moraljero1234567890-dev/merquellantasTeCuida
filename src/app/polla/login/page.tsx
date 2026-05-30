@@ -3,6 +3,8 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
+import { Eye, EyeOff } from "lucide-react";
+import { signIn } from "next-auth/react";
 import { usePollaAuth } from "@/lib/polla/use-polla-auth";
 import { writePollaSession } from "@/lib/polla/session";
 
@@ -17,6 +19,7 @@ export default function PollaLoginPage() {
   const { session: existingSession, checked } = usePollaAuth({ redirect: false });
   const [cedula, setCedula] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
@@ -63,6 +66,22 @@ export default function PollaLoginPage() {
         };
       };
       writePollaSession(data.user);
+
+      // Single sign-on: if this person also has dashboard access (i.e. exists
+      // in the main users collection), establish a NextAuth session too so a
+      // single login covers everything. This is a harmless no-op for
+      // polla-only / external users -- their credentials simply won't match a
+      // dashboard account and we ignore the failure.
+      try {
+        await signIn("credentials", {
+          cedula: trimmedCedula,
+          password,
+          redirect: false,
+        });
+      } catch {
+        /* no dashboard account -- polla session is enough */
+      }
+
       router.push("/polla/tablero");
     } catch {
       setError("No pudimos validar tu sesión. Intenta de nuevo.");
@@ -203,17 +222,33 @@ export default function PollaLoginPage() {
                 >
                   Contraseña
                 </label>
-                <input
-                  id="password"
-                  name="password"
-                  type="password"
-                  autoComplete="current-password"
-                  required
-                  value={password}
-                  onChange={(e) => setPassword(e.target.value)}
-                  placeholder="Tu contraseña"
-                  className="mt-2 h-12 w-full border border-[var(--line)] bg-white px-4 text-base text-[var(--foreground)] outline-none transition focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
-                />
+                <div className="relative mt-2">
+                  <input
+                    id="password"
+                    name="password"
+                    type={showPassword ? "text" : "password"}
+                    autoComplete="current-password"
+                    required
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    placeholder="Tu contraseña"
+                    className="h-12 w-full border border-[var(--line)] bg-white pl-4 pr-12 text-base text-[var(--foreground)] outline-none transition focus:border-[var(--brand)] focus:ring-2 focus:ring-[var(--brand)]/20"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    aria-label={
+                      showPassword ? "Ocultar contraseña" : "Mostrar contraseña"
+                    }
+                    className="absolute inset-y-0 right-0 flex items-center pr-3 text-[var(--foreground-muted)] transition hover:text-[var(--brand)]"
+                  >
+                    {showPassword ? (
+                      <EyeOff className="h-5 w-5" />
+                    ) : (
+                      <Eye className="h-5 w-5" />
+                    )}
+                  </button>
+                </div>
               </div>
 
               {error && (

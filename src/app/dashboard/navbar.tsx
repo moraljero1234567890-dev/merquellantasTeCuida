@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { Menu, X, User2, Home, FileText, ChevronDown, LogOut, HelpCircle, Palmtree, HeartPlus, Landmark, GraduationCap } from 'lucide-react';
 import { useSession, signOut } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
+import { clearPollaSession } from '@/lib/polla/session';
 
 const DashboardNavbar = ({ activePage = 'home' }) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
@@ -16,6 +17,9 @@ const DashboardNavbar = ({ activePage = 'home' }) => {
   } : null;
 
   const handleLogout = async () => {
+    // Clear the polla session too so logging out of the dashboard logs the
+    // user out of everything.
+    clearPollaSession();
     await signOut({ callbackUrl: '/auth/login' });
   };
 
