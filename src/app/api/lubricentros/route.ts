@@ -10,7 +10,8 @@ const COLLECTION = 'lubricentro_ordenes';
 // Used both to validate incoming line items and to build the searchable blob.
 export const SERVICIOS = [
   'Alineación',
-  'Cambio de aceite',
+  'Cambio de aceites caja',
+  'Cambio de aceite diferencial',
   'Filtro de aire primario',
   'Filtro de aire secundario',
   'Filtro aceite',

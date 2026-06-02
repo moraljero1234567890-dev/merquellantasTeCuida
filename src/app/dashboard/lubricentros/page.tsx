@@ -32,7 +32,8 @@ import {
 // Canonical service rows printed on the MERQUELLANTAS "Orden de trabajo".
 const SERVICIOS = [
   'Alineación',
-  'Cambio de aceite',
+  'Cambio de aceites caja',
+  'Cambio de aceite diferencial',
   'Filtro de aire primario',
   'Filtro de aire secundario',
   'Filtro aceite',
