@@ -465,6 +465,12 @@ export async function PATCH(req: NextRequest) {
     return NextResponse.json({ error: 'Gestión inválida' }, { status: 400 });
   }
 
+  const db = await getDb();
+  const existing = await db.collection(COLLECTION).findOne({ _id: new ObjectId(id) });
+  if (!existing) {
+    return NextResponse.json({ error: 'Orden no encontrada' }, { status: 404 });
+  }
+
   const set: Record<string, unknown> = {
     gestion_tipo: tipo,
     gestion_nota: clean(body.gestion_nota),
@@ -483,7 +489,20 @@ export async function PATCH(req: NextRequest) {
     set.gestion_fecha = null;
   }
 
-  const db = await getDb();
+  // "Called, rejected, keep alerting" reschedules the next-change date forward
+  // by the order's interval so it re-surfaces next cycle instead of staying
+  // overdue. Base = whichever is later of today / the current next-change date.
+  if (tipo === 'llamado_rechazado') {
+    const meses = parseInt(clean(existing.proximo_cambio_meses), 10);
+    if (Number.isFinite(meses)) {
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      const current = existing.proximo_cambio_fecha instanceof Date ? existing.proximo_cambio_fecha : null;
+      const base = current && current > today ? current : today;
+      set.proximo_cambio_fecha = addMonths(base, meses);
+    }
+  }
+
   const result = await db.collection(COLLECTION).updateOne({ _id: new ObjectId(id) }, { $set: set });
   if (result.matchedCount === 0) {
     return NextResponse.json({ error: 'Orden no encontrada' }, { status: 404 });

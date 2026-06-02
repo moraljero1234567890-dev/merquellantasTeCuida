@@ -719,6 +719,16 @@ export default function LubricentrosPage() {
       minute: '2-digit',
     }).format(new Date(date));
 
+  // Auto-dismiss the save toast after a few seconds.
+  useEffect(() => {
+    if (!saved && !saveError) return;
+    const t = setTimeout(() => {
+      setSaved(false);
+      setSaveError(null);
+    }, 4500);
+    return () => clearTimeout(t);
+  }, [saved, saveError]);
+
   return (
     <>
       <DashboardNavbar activePage="lubricentros" />
@@ -799,29 +809,6 @@ export default function LubricentrosPage() {
                   >
                     Cancelar
                   </button>
-                </div>
-              )}
-              {saved && (
-                <div className="p-4 bg-emerald-50 text-emerald-800 rounded-xl flex items-center gap-3 border border-emerald-100">
-                  <CheckCircle size={20} />
-                  <p className="text-sm font-medium">
-                    {savedNo
-                      ? `Orden ${savedNo} ${savedEdit ? 'actualizada' : 'guardada'} correctamente.`
-                      : `Orden ${savedEdit ? 'actualizada' : 'guardada'} correctamente.`}
-                  </p>
-                  <button
-                    type="button"
-                    onClick={() => setSaved(false)}
-                    className="ml-auto text-emerald-700 hover:text-emerald-900"
-                  >
-                    <X size={18} />
-                  </button>
-                </div>
-              )}
-              {saveError && (
-                <div className="p-4 bg-red-50 text-red-700 rounded-xl flex items-center gap-3 border border-red-100">
-                  <AlertCircle size={20} />
-                  <p className="text-sm">{saveError}</p>
                 </div>
               )}
 
@@ -1485,7 +1472,9 @@ export default function LubricentrosPage() {
                 <Phone className="h-5 w-5 text-orange-500 mt-0.5 flex-shrink-0" />
                 <div>
                   <div className="text-sm font-medium text-gray-900">Llamé — el cliente rechazó</div>
-                  <div className="text-xs text-gray-500">Seguir alertando en el futuro.</div>
+                  <div className="text-xs text-gray-500">
+                    Reprograma la próxima alerta (+{gestionTarget.proximo_cambio_meses || '—'} meses).
+                  </div>
                 </div>
               </button>
 
@@ -1537,6 +1526,42 @@ export default function LubricentrosPage() {
                 </div>
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Save toast — fixed so it's noticed regardless of scroll position */}
+      {(saved || saveError) && (
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[70] w-full max-w-md px-4">
+          <div
+            className={`flex items-start gap-3 rounded-xl shadow-2xl border p-4 ${
+              saveError
+                ? 'bg-red-600 text-white border-red-700'
+                : 'bg-emerald-600 text-white border-emerald-700'
+            }`}
+          >
+            {saveError ? (
+              <AlertCircle size={20} className="flex-shrink-0 mt-0.5" />
+            ) : (
+              <CheckCircle size={20} className="flex-shrink-0 mt-0.5" />
+            )}
+            <p className="text-sm font-medium flex-1">
+              {saveError
+                ? saveError
+                : savedNo
+                  ? `Orden ${savedNo} ${savedEdit ? 'actualizada' : 'guardada'} correctamente.`
+                  : `Orden ${savedEdit ? 'actualizada' : 'guardada'} correctamente.`}
+            </p>
+            <button
+              onClick={() => {
+                setSaved(false);
+                setSaveError(null);
+              }}
+              className="text-white/80 hover:text-white flex-shrink-0"
+              aria-label="Cerrar"
+            >
+              <X size={18} />
+            </button>
           </div>
         </div>
       )}
