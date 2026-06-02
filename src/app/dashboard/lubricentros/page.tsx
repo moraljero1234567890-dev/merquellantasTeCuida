@@ -17,6 +17,7 @@ import {
   Bell,
   ChevronLeft,
   ChevronRight,
+  Pencil,
   X,
 } from 'lucide-react';
 
@@ -77,6 +78,16 @@ const emptyFields = {
 
 type Fields = typeof emptyFields;
 
+// Local YYYY-MM-DD, used to default <input type="date"> to today.
+function todayStr(): string {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// Fresh form values: everything blank except Fecha, which defaults to today
+// (still editable). The order number is assigned by the server on save.
+const freshFields = (): Fields => ({ ...emptyFields, fecha: todayStr() });
+
 interface Orden extends Fields {
   _id: string;
   servicios: ServicioLinea[];
@@ -86,6 +97,20 @@ interface Orden extends Fields {
 }
 
 const ALERTAS_PAGE_SIZE = 20;
+
+// Required fields: customer identity + the whole vehicle block. Everything else
+// (and all services) stays optional.
+const REQUIRED: { key: keyof Fields; label: string }[] = [
+  { key: 'nombre', label: 'Nombre' },
+  { key: 'cedula_nit', label: 'Cédula y/o NIT' },
+  { key: 'celular', label: 'Celular' },
+  { key: 'placa', label: 'Placa' },
+  { key: 'marca', label: 'Marca' },
+  { key: 'tipo', label: 'Tipo' },
+  { key: 'km_actual', label: 'KM actual vehículo' },
+  { key: 'frec_cambio_km', label: 'Frec. cambio (km)' },
+  { key: 'proximo_cambio_meses', label: 'Próximo cambio (meses)' },
+];
 
 // Compute the next-change date from the months interval. Base is the service
 // date (YYYY-MM-DD) when present, otherwise today — mirroring the server so the
@@ -142,15 +167,20 @@ function Field({
   value,
   onChange,
   type = 'text',
+  required = false,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   type?: string;
+  required?: boolean;
 }) {
   return (
     <label className="block">
-      <span className="block text-xs font-medium text-gray-500 mb-1">{label}</span>
+      <span className="block text-xs font-medium text-gray-500 mb-1">
+        {label}
+        {required && <span className="text-red-500"> *</span>}
+      </span>
       <input
         type={type}
         value={value}
@@ -166,11 +196,35 @@ export default function LubricentrosPage() {
   const [tab, setTab] = useState<'nueva' | 'buscar' | 'alertas'>('nueva');
 
   // ---- Form state ----
-  const [fields, setFields] = useState<Fields>(emptyFields);
+  const [fields, setFields] = useState<Fields>(freshFields);
   const [servicios, setServicios] = useState<ServicioLinea[]>(emptyServicios());
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
+  const [savedNo, setSavedNo] = useState<string | null>(null);
+  const [savedEdit, setSavedEdit] = useState(false);
+  // When set, the form edits this existing order instead of creating a new one.
+  const [editingId, setEditingId] = useState<string | null>(null);
+  const [editingNo, setEditingNo] = useState<string | null>(null);
+  // Preview of the next consecutive order number that will be assigned on save.
+  const [nextNo, setNextNo] = useState<string | null>(null);
+
+  const fetchNextNo = useCallback(async () => {
+    if (!session) return;
+    try {
+      const res = await fetch('/api/lubricentros?next=true');
+      if (res.ok) {
+        const d = await res.json();
+        setNextNo(d.next || null);
+      }
+    } catch {
+      // ignore
+    }
+  }, [session]);
+
+  useEffect(() => {
+    fetchNextNo();
+  }, [fetchNextNo]);
 
   const setField = (key: keyof Fields, value: string) =>
     setFields((f) => ({ ...f, [key]: value }));
@@ -179,28 +233,70 @@ export default function LubricentrosPage() {
     setServicios((rows) => rows.map((r, idx) => (idx === i ? { ...r, [key]: value } : r)));
 
   const resetForm = () => {
-    setFields(emptyFields);
+    setFields(freshFields());
     setServicios(emptyServicios());
+    setEditingId(null);
+    setEditingNo(null);
+  };
+
+  // Load an existing order into the form for editing.
+  const startEdit = (o: Orden) => {
+    const next = { ...emptyFields };
+    (Object.keys(emptyFields) as (keyof Fields)[]).forEach((k) => {
+      next[k] = (o[k] as string) || '';
+    });
+    const rows = emptyServicios();
+    (o.servicios || []).forEach((s) => {
+      const idx = rows.findIndex((r) => r.servicio === s.servicio);
+      if (idx >= 0) {
+        rows[idx] = {
+          servicio: s.servicio,
+          referencia: s.referencia || '',
+          unidad: s.unidad || '',
+          valor_unitario: s.valor_unitario || '',
+          subtotal: s.subtotal || '',
+        };
+      }
+    });
+    setFields(next);
+    setServicios(rows);
+    setEditingId(o._id);
+    setEditingNo(o.orden_no || null);
+    setSaved(false);
+    setSaveError(null);
+    setDetail(null);
+    setTab('nueva');
   };
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    const missing = REQUIRED.filter((r) => !fields[r.key].trim()).map((r) => r.label);
+    if (missing.length) {
+      setSaveError(`Completa los campos requeridos: ${missing.join(', ')}.`);
+      return;
+    }
+
     setSaving(true);
     setSaveError(null);
     try {
+      const editing = editingId;
       const res = await fetch('/api/lubricentros', {
-        method: 'POST',
+        method: editing ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ ...fields, servicios }),
+        body: JSON.stringify(editing ? { id: editing, ...fields, servicios } : { ...fields, servicios }),
       });
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) {
-        const data = await res.json().catch(() => ({}));
         throw new Error(data.error || 'Error al guardar');
       }
+      setSavedNo(data.orden_no || editingNo || null);
+      setSavedEdit(!!editing);
       setSaved(true);
       resetForm();
-      // Refresh search results in the background so the new order shows up.
+      // Refresh search results and the next-number preview in the background.
       runSearch(query);
+      if (!editing) fetchNextNo();
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Error al guardar');
     } finally {
@@ -312,7 +408,7 @@ export default function LubricentrosPage() {
               }`}
             >
               <ClipboardList size={16} />
-              Nueva orden
+              {editingId ? 'Editar orden' : 'Nueva orden'}
             </button>
             <button
               onClick={() => setTab('buscar')}
@@ -341,10 +437,29 @@ export default function LubricentrosPage() {
           {/* ---------- NUEVA ORDEN ---------- */}
           {tab === 'nueva' && (
             <form onSubmit={handleSave} className="space-y-6">
+              {editingId && (
+                <div className="p-4 bg-blue-50 text-blue-800 rounded-xl flex items-center gap-3 border border-blue-100">
+                  <ClipboardList size={20} />
+                  <p className="text-sm font-medium">
+                    Editando la orden {editingNo || ''}.
+                  </p>
+                  <button
+                    type="button"
+                    onClick={resetForm}
+                    className="ml-auto text-sm text-blue-700 hover:text-blue-900 underline"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              )}
               {saved && (
                 <div className="p-4 bg-emerald-50 text-emerald-800 rounded-xl flex items-center gap-3 border border-emerald-100">
                   <CheckCircle size={20} />
-                  <p className="text-sm font-medium">Orden guardada correctamente.</p>
+                  <p className="text-sm font-medium">
+                    {savedNo
+                      ? `Orden ${savedNo} ${savedEdit ? 'actualizada' : 'guardada'} correctamente.`
+                      : `Orden ${savedEdit ? 'actualizada' : 'guardada'} correctamente.`}
+                  </p>
                   <button
                     type="button"
                     onClick={() => setSaved(false)}
@@ -367,7 +482,19 @@ export default function LubricentrosPage() {
                   <ClipboardList size={18} className="text-amber-500" /> Datos de la orden
                 </h2>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  <Field label="No. orden de trabajo" value={fields.orden_no} onChange={(v) => setField('orden_no', v)} />
+                  <div>
+                    <span className="block text-xs font-medium text-gray-500 mb-1">No. orden de trabajo</span>
+                    {editingId ? (
+                      <div className="rounded-lg border border-gray-300 bg-gray-50 py-2 px-3 text-sm font-medium text-gray-900">
+                        {editingNo || '—'}
+                      </div>
+                    ) : (
+                      <div className="rounded-lg border border-dashed border-gray-300 bg-gray-50 py-2 px-3 text-sm">
+                        <span className="font-semibold text-gray-900">{nextNo || '—'}</span>
+                        <span className="text-gray-400"> · se asigna al guardar</span>
+                      </div>
+                    )}
+                  </div>
                   <Field label="Fecha" value={fields.fecha} onChange={(v) => setField('fecha', v)} type="date" />
                   <Field label="Factura No." value={fields.factura_no} onChange={(v) => setField('factura_no', v)} />
                   <div>
@@ -399,11 +526,11 @@ export default function LubricentrosPage() {
                   <User2 size={18} className="text-amber-500" /> Cliente
                 </h2>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  <Field label="Nombre" value={fields.nombre} onChange={(v) => setField('nombre', v)} />
-                  <Field label="Cédula y/o NIT" value={fields.cedula_nit} onChange={(v) => setField('cedula_nit', v)} />
+                  <Field label="Nombre" value={fields.nombre} onChange={(v) => setField('nombre', v)} required />
+                  <Field label="Cédula y/o NIT" value={fields.cedula_nit} onChange={(v) => setField('cedula_nit', v)} required />
                   <Field label="Fecha de cumpleaños" value={fields.fecha_cumpleanos} onChange={(v) => setField('fecha_cumpleanos', v)} />
                   <Field label="Dirección" value={fields.direccion} onChange={(v) => setField('direccion', v)} />
-                  <Field label="Celular" value={fields.celular} onChange={(v) => setField('celular', v)} />
+                  <Field label="Celular" value={fields.celular} onChange={(v) => setField('celular', v)} required />
                   <Field label="Correo electrónico" value={fields.correo} onChange={(v) => setField('correo', v)} />
                   <Field label="Cliente" value={fields.cliente} onChange={(v) => setField('cliente', v)} />
                 </div>
@@ -415,13 +542,13 @@ export default function LubricentrosPage() {
                   <Car size={18} className="text-amber-500" /> Vehículo
                 </h2>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  <Field label="Placa" value={fields.placa} onChange={(v) => setField('placa', v)} />
-                  <Field label="Marca" value={fields.marca} onChange={(v) => setField('marca', v)} />
-                  <Field label="Tipo" value={fields.tipo} onChange={(v) => setField('tipo', v)} />
-                  <Field label="KM actual vehículo" value={fields.km_actual} onChange={(v) => setField('km_actual', v)} />
-                  <Field label="Frec. cambio (km)" value={fields.frec_cambio_km} onChange={(v) => setField('frec_cambio_km', v)} />
+                  <Field label="Placa" value={fields.placa} onChange={(v) => setField('placa', v)} required />
+                  <Field label="Marca" value={fields.marca} onChange={(v) => setField('marca', v)} required />
+                  <Field label="Tipo" value={fields.tipo} onChange={(v) => setField('tipo', v)} required />
+                  <Field label="KM actual vehículo" value={fields.km_actual} onChange={(v) => setField('km_actual', v)} required />
+                  <Field label="Frec. cambio (km)" value={fields.frec_cambio_km} onChange={(v) => setField('frec_cambio_km', v)} required />
                   <div>
-                    <Field label="Próximo cambio (meses)" value={fields.proximo_cambio_meses} onChange={(v) => setField('proximo_cambio_meses', v)} />
+                    <Field label="Próximo cambio (meses)" value={fields.proximo_cambio_meses} onChange={(v) => setField('proximo_cambio_meses', v)} required />
                     {(() => {
                       const next = computeNextChange(fields.fecha, fields.proximo_cambio_meses);
                       return next ? (
@@ -437,9 +564,12 @@ export default function LubricentrosPage() {
 
               {/* Servicios */}
               <section className="bg-white p-5 sm:p-6 rounded-2xl shadow-sm border border-gray-100">
-                <h2 className="flex items-center gap-2 text-base font-semibold text-gray-800 mb-4">
+                <h2 className="flex items-center gap-2 text-base font-semibold text-gray-800 mb-1">
                   <Wrench size={18} className="text-amber-500" /> Servicios
                 </h2>
+                <p className="text-xs text-gray-400 mb-4">
+                  Opcional. Marca la referencia (sencilla/doble) y los valores de los servicios aplicados.
+                </p>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
@@ -525,7 +655,7 @@ export default function LubricentrosPage() {
                   onClick={resetForm}
                   className="px-5 py-3 rounded-xl bg-gray-100 text-gray-700 text-sm font-medium hover:bg-gray-200 transition-colors"
                 >
-                  Limpiar
+                  {editingId ? 'Cancelar edición' : 'Limpiar'}
                 </button>
                 <button
                   type="submit"
@@ -533,7 +663,7 @@ export default function LubricentrosPage() {
                   className="inline-flex items-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-white text-sm font-medium shadow-md hover:from-amber-600 hover:to-amber-700 transition-colors disabled:opacity-50"
                 >
                   <Save size={18} />
-                  {saving ? 'Guardando...' : 'Guardar orden'}
+                  {saving ? 'Guardando...' : editingId ? 'Guardar cambios' : 'Guardar orden'}
                 </button>
               </div>
             </form>
@@ -745,22 +875,22 @@ export default function LubricentrosPage() {
 
             {detail.servicios && detail.servicios.length > 0 && (
               <div className="mt-5">
-                <h3 className="text-sm font-semibold text-gray-800 mb-2">Servicios</h3>
+                <h3 className="text-sm font-semibold text-gray-900 mb-2">Servicios</h3>
                 <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
+                  <table className="w-full text-xs text-gray-900">
                     <thead>
-                      <tr className="text-left text-gray-500 border-b border-gray-200">
-                        <th className="py-1.5 pr-3">Servicio</th>
-                        <th className="py-1.5 px-2">Ref.</th>
-                        <th className="py-1.5 px-2">Unidad</th>
-                        <th className="py-1.5 px-2">V. unitario</th>
-                        <th className="py-1.5 pl-2">Subtotal</th>
+                      <tr className="text-left text-gray-900 border-b border-gray-200">
+                        <th className="py-1.5 pr-3 font-semibold">Servicio</th>
+                        <th className="py-1.5 px-2 font-semibold">Ref.</th>
+                        <th className="py-1.5 px-2 font-semibold">Unidad</th>
+                        <th className="py-1.5 px-2 font-semibold">V. unitario</th>
+                        <th className="py-1.5 pl-2 font-semibold">Subtotal</th>
                       </tr>
                     </thead>
                     <tbody>
                       {detail.servicios.map((s, i) => (
                         <tr key={i} className="border-b border-gray-100 last:border-0">
-                          <td className="py-1.5 pr-3 text-gray-700">{s.servicio}</td>
+                          <td className="py-1.5 pr-3">{s.servicio}</td>
                           <td className="py-1.5 px-2 capitalize">{s.referencia || '—'}</td>
                           <td className="py-1.5 px-2">{s.unidad || '—'}</td>
                           <td className="py-1.5 px-2">{s.valor_unitario || '—'}</td>
@@ -784,6 +914,16 @@ export default function LubricentrosPage() {
               <span className="text-gray-500">Subtotal: <span className="text-gray-800">{detail.subtotal || '—'}</span></span>
               <span className="text-gray-500">IVA: <span className="text-gray-800">{detail.iva || '—'}</span></span>
               <span className="text-gray-500">Total: <span className="font-semibold text-gray-900">{detail.total || '—'}</span></span>
+            </div>
+
+            <div className="mt-6 flex justify-end">
+              <button
+                onClick={() => startEdit(detail)}
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-white text-sm font-medium shadow-md hover:from-amber-600 hover:to-amber-700 transition-colors"
+              >
+                <Pencil size={16} />
+                Editar orden
+              </button>
             </div>
           </div>
         </div>

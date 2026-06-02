@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { addMonths } from 'date-fns';
+import { ObjectId } from 'mongodb';
 import { getDb } from '../../../lib/db';
 import { auth } from '../../../lib/auth';
 
@@ -52,6 +53,20 @@ const TEXT_FIELDS = [
   'total',
 ] as const;
 
+// Fields the client must provide: customer identity plus the full vehicle
+// block. Everything else stays optional. Labels are reused in error messages.
+const REQUIRED_FIELDS: { key: string; label: string }[] = [
+  { key: 'nombre', label: 'Nombre' },
+  { key: 'cedula_nit', label: 'Cédula y/o NIT' },
+  { key: 'celular', label: 'Celular' },
+  { key: 'placa', label: 'Placa' },
+  { key: 'marca', label: 'Marca' },
+  { key: 'tipo', label: 'Tipo' },
+  { key: 'km_actual', label: 'KM actual vehículo' },
+  { key: 'frec_cambio_km', label: 'Frec. cambio (km)' },
+  { key: 'proximo_cambio_meses', label: 'Próximo cambio (meses)' },
+];
+
 interface ServicioLinea {
   servicio: string;
   referencia: string; // '' | 'sencilla' | 'doble'
@@ -62,6 +77,29 @@ interface ServicioLinea {
 
 function clean(v: unknown): string {
   return typeof v === 'string' ? v.trim() : v == null ? '' : String(v);
+}
+
+// Names of required fields left blank in the given doc.
+function missingRequired(doc: Record<string, unknown>): string[] {
+  return REQUIRED_FIELDS.filter((r) => !clean(doc[r.key])).map((r) => r.label);
+}
+
+// Normalize incoming service line items: keep only rows for a real service that
+// carry any data. Services stay entirely optional.
+function normalizeServicios(body: { servicios?: unknown }): ServicioLinea[] {
+  const raw = Array.isArray(body.servicios) ? body.servicios : [];
+  return raw
+    .map((s: Record<string, unknown>) => ({
+      servicio: clean(s?.servicio),
+      referencia: clean(s?.referencia),
+      unidad: clean(s?.unidad),
+      valor_unitario: clean(s?.valor_unitario),
+      subtotal: clean(s?.subtotal),
+    }))
+    .filter(
+      (s: ServicioLinea) =>
+        s.servicio && (s.referencia || s.unidad || s.valor_unitario || s.subtotal),
+    );
 }
 
 // Build a single lowercased string holding every value in the order so the
@@ -78,6 +116,21 @@ function buildSearchBlob(doc: Record<string, unknown>, servicios: ServicioLinea[
 // Escape user input before using it inside a RegExp.
 function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+// Atomically reserve the next consecutive order number and return it
+// zero-padded to 6 digits (000001, 000002, ...). The $inc + upsert is atomic,
+// so concurrent requests never get the same number.
+async function nextOrdenNo(db: Awaited<ReturnType<typeof getDb>>): Promise<string> {
+  const counter = await db
+    .collection<{ _id: string; seq: number }>('counters')
+    .findOneAndUpdate(
+      { _id: 'lubricentro_orden' },
+      { $inc: { seq: 1 } },
+      { upsert: true, returnDocument: 'after' },
+    );
+  const seq = counter?.seq ?? 1;
+  return String(seq).padStart(6, '0');
 }
 
 // Next-change date = base date + interval in months ("proximo_cambio_meses").
@@ -110,6 +163,17 @@ export async function GET(req: NextRequest) {
 
   const { searchParams } = new URL(req.url);
   const db = await getDb();
+
+  // Peek at the next consecutive order number WITHOUT reserving it, so the form
+  // can preview what will be assigned on save. The real number is still claimed
+  // atomically in POST.
+  if (searchParams.get('next') === 'true') {
+    const counter = await db
+      .collection<{ _id: string; seq: number }>('counters')
+      .findOne({ _id: 'lubricentro_orden' });
+    const seq = (counter?.seq ?? 0) + 1;
+    return NextResponse.json({ next: String(seq).padStart(6, '0') });
+  }
 
   // Alerts view: only orders that have a computed next-change date, sorted by
   // it ascending and paginated so we never load everything at once.
@@ -144,7 +208,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json(results);
 }
 
-// POST /api/lubricentros — create an order. No field is required.
+// POST /api/lubricentros — create an order. Customer + vehicle fields required.
 export async function POST(req: NextRequest) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
@@ -155,23 +219,23 @@ export async function POST(req: NextRequest) {
   const doc: Record<string, unknown> = {};
   for (const f of TEXT_FIELDS) doc[f] = clean(body[f]);
 
-  // Normalize service line items: keep only rows that carry any data.
-  const rawServicios = Array.isArray(body.servicios) ? body.servicios : [];
-  const servicios: ServicioLinea[] = rawServicios
-    .map((s: Record<string, unknown>) => ({
-      servicio: clean(s?.servicio),
-      referencia: clean(s?.referencia),
-      unidad: clean(s?.unidad),
-      valor_unitario: clean(s?.valor_unitario),
-      subtotal: clean(s?.subtotal),
-    }))
-    .filter(
-      (s: ServicioLinea) =>
-        s.servicio &&
-        (s.referencia || s.unidad || s.valor_unitario || s.subtotal),
+  const missing = missingRequired(doc);
+  if (missing.length) {
+    return NextResponse.json(
+      { error: `Faltan campos requeridos: ${missing.join(', ')}.` },
+      { status: 400 },
     );
+  }
 
+  const servicios = normalizeServicios(body);
+
+  const db = await getDb();
   const createdAt = new Date();
+
+  // The order number is always system-assigned and consecutive — any value the
+  // client sent is ignored. Reserved only after validation passes so failed
+  // requests don't burn a number.
+  doc.orden_no = await nextOrdenNo(db);
   doc.servicios = servicios;
   doc.proximo_cambio_fecha = computeProximoCambioFecha(
     doc.fecha as string,
@@ -183,8 +247,61 @@ export async function POST(req: NextRequest) {
   doc.created_by_nombre = session.user.nombre || null;
   doc.created_at = createdAt;
 
-  const db = await getDb();
   const result = await db.collection(COLLECTION).insertOne(doc);
 
-  return NextResponse.json({ success: true, id: result.insertedId.toString() });
+  return NextResponse.json({
+    success: true,
+    id: result.insertedId.toString(),
+    orden_no: doc.orden_no,
+  });
+}
+
+// PUT /api/lubricentros — edit an existing order. The consecutive order number
+// and creation metadata are preserved; everything else is replaced.
+export async function PUT(req: NextRequest) {
+  const session = await auth();
+  if (!session) return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
+  if (session.user.rol === 'externo') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+
+  const body = await req.json().catch(() => ({}));
+  const id = body.id;
+  if (!id || !ObjectId.isValid(id)) {
+    return NextResponse.json({ error: 'ID inválido' }, { status: 400 });
+  }
+
+  const db = await getDb();
+  const existing = await db.collection(COLLECTION).findOne({ _id: new ObjectId(id) });
+  if (!existing) {
+    return NextResponse.json({ error: 'Orden no encontrada' }, { status: 404 });
+  }
+
+  const update: Record<string, unknown> = {};
+  for (const f of TEXT_FIELDS) update[f] = clean(body[f]);
+  // Order number is never editable — keep the one originally assigned.
+  update.orden_no = clean(existing.orden_no);
+
+  const missing = missingRequired(update);
+  if (missing.length) {
+    return NextResponse.json(
+      { error: `Faltan campos requeridos: ${missing.join(', ')}.` },
+      { status: 400 },
+    );
+  }
+
+  const servicios = normalizeServicios(body);
+  const fallbackBase = existing.created_at instanceof Date ? existing.created_at : new Date();
+
+  update.servicios = servicios;
+  update.proximo_cambio_fecha = computeProximoCambioFecha(
+    update.fecha as string,
+    update.proximo_cambio_meses as string,
+    fallbackBase,
+  );
+  update._search = buildSearchBlob(update, servicios);
+  update.updated_at = new Date();
+  update.updated_by = session.user.id;
+
+  await db.collection(COLLECTION).updateOne({ _id: new ObjectId(id) }, { $set: update });
+
+  return NextResponse.json({ success: true, orden_no: update.orden_no });
 }
