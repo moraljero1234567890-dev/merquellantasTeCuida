@@ -18,6 +18,12 @@ import {
   ChevronLeft,
   ChevronRight,
   Pencil,
+  Phone,
+  PhoneOff,
+  CalendarPlus,
+  CalendarClock,
+  FilePlus,
+  Settings2,
   X,
 } from 'lucide-react';
 
@@ -101,6 +107,9 @@ interface Orden extends Fields {
   created_at: string;
   created_by_nombre?: string | null;
   proximo_cambio_fecha?: string | null;
+  gestion_tipo?: string | null;
+  gestion_fecha?: string | null;
+  gestion_nota?: string | null;
 }
 
 // Shapes returned by the autocomplete suggestion endpoints.
@@ -290,7 +299,7 @@ function Autocomplete({
 
 export default function LubricentrosPage() {
   const { data: session } = useSession();
-  const [tab, setTab] = useState<'nueva' | 'buscar' | 'alertas'>('nueva');
+  const [tab, setTab] = useState<'nueva' | 'buscar' | 'alertas' | 'revisiones'>('nueva');
 
   // ---- Form state ----
   const [fields, setFields] = useState<Fields>(freshFields);
@@ -491,6 +500,33 @@ export default function LubricentrosPage() {
     setTab('nueva');
   };
 
+  // Start a brand-new order (new consecutive number) pre-filled with an existing
+  // order's client + vehicle data. KM actual is left blank on purpose.
+  const prefillNewOrder = (o: Orden) => {
+    const next = freshFields();
+    next.nombre = o.nombre || '';
+    next.cedula_nit = o.cedula_nit || '';
+    next.fecha_cumpleanos = o.fecha_cumpleanos || '';
+    next.direccion = o.direccion || '';
+    next.celular = o.celular || '';
+    next.correo = o.correo || '';
+    next.cliente = o.cliente || '';
+    next.placa = (o.placa || '').toUpperCase();
+    next.marca = o.marca || '';
+    next.tipo = o.tipo || '';
+    next.frec_cambio_km = o.frec_cambio_km || '';
+    next.proximo_cambio_meses = o.proximo_cambio_meses || '';
+    setFields(next);
+    setServicios(emptyServicios());
+    setEditingId(null);
+    setEditingNo(null);
+    setSaved(false);
+    setSaveError(null);
+    setDetail(null);
+    setGestionTarget(null);
+    setTab('nueva');
+  };
+
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
 
@@ -590,6 +626,78 @@ export default function LubricentrosPage() {
     if (tab === 'alertas') fetchAlertas(alertasPage);
   }, [tab, alertasPage, fetchAlertas]);
 
+  // ---- Scheduled revisions state ----
+  const [revisiones, setRevisiones] = useState<Orden[]>([]);
+  const [revisionesPage, setRevisionesPage] = useState(1);
+  const [revisionesTotal, setRevisionesTotal] = useState(0);
+  const [loadingRevisiones, setLoadingRevisiones] = useState(false);
+  const revisionesTotalPages = Math.max(1, Math.ceil(revisionesTotal / ALERTAS_PAGE_SIZE));
+
+  const fetchRevisiones = useCallback(
+    async (page: number) => {
+      if (!session) return;
+      setLoadingRevisiones(true);
+      try {
+        const res = await fetch(`/api/lubricentros?revisiones=true&page=${page}&pageSize=${ALERTAS_PAGE_SIZE}`);
+        if (res.ok) {
+          const data = await res.json();
+          setRevisiones(data.results || []);
+          setRevisionesTotal(data.total || 0);
+        }
+      } catch {
+        // ignore
+      } finally {
+        setLoadingRevisiones(false);
+      }
+    },
+    [session],
+  );
+
+  useEffect(() => {
+    if (tab === 'revisiones') fetchRevisiones(revisionesPage);
+  }, [tab, revisionesPage, fetchRevisiones]);
+
+  // ---- Manage ("gestionar") an alert ----
+  const [gestionTarget, setGestionTarget] = useState<Orden | null>(null);
+  const [gestionFecha, setGestionFecha] = useState('');
+  const [gestionSaving, setGestionSaving] = useState(false);
+
+  const gestionar = async (tipo: string, fecha?: string) => {
+    if (!gestionTarget) return;
+    setGestionSaving(true);
+    try {
+      const res = await fetch('/api/lubricentros', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: gestionTarget._id, gestion_tipo: tipo, gestion_fecha: fecha }),
+      });
+      if (res.ok) {
+        setGestionTarget(null);
+        setGestionFecha('');
+        fetchAlertas(alertasPage);
+        if (tab === 'revisiones') fetchRevisiones(revisionesPage);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setGestionSaving(false);
+    }
+  };
+
+  // Remove a scheduled revision from the list (mark handled).
+  const quitarRevision = async (id: string) => {
+    try {
+      const res = await fetch('/api/lubricentros', {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, gestion_tipo: 'atendida' }),
+      });
+      if (res.ok) fetchRevisiones(revisionesPage);
+    } catch {
+      // ignore
+    }
+  };
+
   const formatDateOnly = (date: string | Date) =>
     new Intl.DateTimeFormat('es-CO', { year: 'numeric', month: 'long', day: 'numeric' }).format(
       new Date(date),
@@ -661,6 +769,17 @@ export default function LubricentrosPage() {
             >
               <Bell size={16} />
               Alertas
+            </button>
+            <button
+              onClick={() => setTab('revisiones')}
+              className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-colors ${
+                tab === 'revisiones'
+                  ? 'bg-amber-500 text-white shadow-md'
+                  : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+              }`}
+            >
+              <CalendarClock size={16} />
+              Revisiones programadas
             </button>
           </div>
 
@@ -1053,16 +1172,16 @@ export default function LubricentrosPage() {
                   {alertas.map((o) => {
                     const status = changeStatus(o.proximo_cambio_fecha);
                     const s = status ? STATUS_STYLES[status] : null;
+                    const llamado = o.gestion_tipo === 'llamado_rechazado';
                     return (
-                      <button
+                      <div
                         key={o._id}
-                        onClick={() => setDetail(o)}
-                        className={`w-full text-left bg-white p-4 rounded-2xl border border-gray-100 border-l-4 ${
+                        className={`bg-white p-4 rounded-2xl border border-gray-100 border-l-4 ${
                           s?.border || 'border-l-gray-300'
-                        } shadow-sm hover:shadow transition-all flex items-center justify-between gap-4`}
+                        } shadow-sm flex items-center justify-between gap-4`}
                       >
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-2 mb-1">
+                        <button onClick={() => setDetail(o)} className="min-w-0 flex-1 text-left hover:opacity-80 transition">
+                          <div className="flex items-center gap-2 mb-1 flex-wrap">
                             <span className="font-semibold text-gray-900 truncate">
                               {o.orden_no ? `Orden ${o.orden_no}` : o.nombre || 'Orden sin número'}
                             </span>
@@ -1071,23 +1190,39 @@ export default function LubricentrosPage() {
                                 {o.placa}
                               </span>
                             )}
+                            {llamado && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-orange-100 text-orange-700 border border-orange-200">
+                                <Phone className="h-3 w-3" /> Contactado · rechazó
+                              </span>
+                            )}
                           </div>
                           <p className="text-xs text-gray-500 truncate">
                             {[o.nombre, o.marca, o.tipo].filter(Boolean).join(' · ') || '—'}
                           </p>
+                        </button>
+                        <div className="flex items-center gap-3 flex-shrink-0">
+                          <div className="text-right">
+                            {s && (
+                              <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold border ${s.badge} mb-1`}>
+                                {s.label}
+                              </span>
+                            )}
+                            <p className="text-xs text-gray-500 flex items-center gap-1 justify-end">
+                              <Calendar className="h-3 w-3" />
+                              {o.proximo_cambio_fecha ? formatDateOnly(o.proximo_cambio_fecha) : '—'}
+                            </p>
+                          </div>
+                          <button
+                            onClick={() => {
+                              setGestionTarget(o);
+                              setGestionFecha('');
+                            }}
+                            className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-amber-500 text-white text-xs font-medium hover:bg-amber-600 transition-colors"
+                          >
+                            <Settings2 size={14} /> Gestionar
+                          </button>
                         </div>
-                        <div className="text-right flex-shrink-0">
-                          {s && (
-                            <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold border ${s.badge} mb-1`}>
-                              {s.label}
-                            </span>
-                          )}
-                          <p className="text-xs text-gray-500 flex items-center gap-1 justify-end">
-                            <Calendar className="h-3 w-3" />
-                            {o.proximo_cambio_fecha ? formatDateOnly(o.proximo_cambio_fecha) : '—'}
-                          </p>
-                        </div>
-                      </button>
+                      </div>
                     );
                   })}
                 </div>
@@ -1109,6 +1244,91 @@ export default function LubricentrosPage() {
                   <button
                     onClick={() => setAlertasPage((p) => Math.min(totalPages, p + 1))}
                     disabled={alertasPage >= totalPages || loadingAlertas}
+                    className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-white border border-gray-200 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Siguiente <ChevronRight size={16} />
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* ---------- REVISIONES PROGRAMADAS ---------- */}
+          {tab === 'revisiones' && (
+            <div className="space-y-5">
+              <div className="text-sm text-gray-500">
+                {loadingRevisiones
+                  ? 'Cargando...'
+                  : `${revisionesTotal} ${revisionesTotal === 1 ? 'revisión programada' : 'revisiones programadas'}`}
+              </div>
+
+              {revisiones.length === 0 && !loadingRevisiones ? (
+                <div className="py-16 text-center text-gray-400 bg-white rounded-2xl border border-gray-100">
+                  <CalendarClock className="h-10 w-10 mx-auto mb-2 opacity-50" />
+                  <p className="text-sm">No hay revisiones programadas.</p>
+                  <p className="text-xs mt-1">Prográmalas desde una alerta con el botón “Gestionar”.</p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {revisiones.map((o) => (
+                    <div
+                      key={o._id}
+                      className="bg-white p-4 rounded-2xl border border-gray-100 border-l-4 border-l-blue-500 shadow-sm flex items-center justify-between gap-4"
+                    >
+                      <button onClick={() => setDetail(o)} className="min-w-0 flex-1 text-left hover:opacity-80 transition">
+                        <div className="flex items-center gap-2 mb-1 flex-wrap">
+                          <span className="font-semibold text-gray-900 truncate">
+                            {o.nombre || (o.orden_no ? `Orden ${o.orden_no}` : 'Sin nombre')}
+                          </span>
+                          {o.placa && (
+                            <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
+                              {o.placa}
+                            </span>
+                          )}
+                        </div>
+                        <p className="text-xs text-gray-500 truncate">
+                          {[o.marca, o.tipo, o.celular].filter(Boolean).join(' · ') || '—'}
+                        </p>
+                        <p className="text-xs text-blue-600 flex items-center gap-1 mt-1">
+                          <CalendarClock className="h-3 w-3" />
+                          Revisión: {o.gestion_fecha ? formatDateOnly(o.gestion_fecha) : '—'}
+                        </p>
+                      </button>
+                      <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2 flex-shrink-0">
+                        <button
+                          onClick={() => prefillNewOrder(o)}
+                          className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-amber-500 text-white text-xs font-medium hover:bg-amber-600 transition-colors"
+                        >
+                          <FilePlus size={14} /> Crear nueva orden
+                        </button>
+                        <button
+                          onClick={() => quitarRevision(o._id)}
+                          className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-white border border-gray-200 text-gray-600 text-xs font-medium hover:bg-gray-50 transition-colors"
+                        >
+                          <X size={14} /> Quitar
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              {/* Pagination */}
+              {revisionesTotal > ALERTAS_PAGE_SIZE && (
+                <div className="flex items-center justify-center gap-3 pt-2">
+                  <button
+                    onClick={() => setRevisionesPage((p) => Math.max(1, p - 1))}
+                    disabled={revisionesPage <= 1 || loadingRevisiones}
+                    className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-white border border-gray-200 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <ChevronLeft size={16} /> Anterior
+                  </button>
+                  <span className="text-sm text-gray-500">
+                    Página {revisionesPage} de {revisionesTotalPages}
+                  </span>
+                  <button
+                    onClick={() => setRevisionesPage((p) => Math.min(revisionesTotalPages, p + 1))}
+                    disabled={revisionesPage >= revisionesTotalPages || loadingRevisiones}
                     className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-white border border-gray-200 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
                   >
                     Siguiente <ChevronRight size={16} />
@@ -1212,13 +1432,109 @@ export default function LubricentrosPage() {
               <span className="text-gray-500">Total: <span className="font-semibold text-gray-900">{detail.total ? formatMoney(parseInt(detail.total, 10) || 0) : '—'}</span></span>
             </div>
 
-            <div className="mt-6 flex justify-end">
+            <div className="mt-6 flex flex-wrap justify-end gap-3">
+              <button
+                onClick={() => prefillNewOrder(detail)}
+                className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white border border-amber-300 text-amber-700 text-sm font-medium hover:bg-amber-50 transition-colors"
+              >
+                <FilePlus size={16} />
+                Crear nueva orden al cliente
+              </button>
               <button
                 onClick={() => startEdit(detail)}
                 className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-white text-sm font-medium shadow-md hover:from-amber-600 hover:to-amber-700 transition-colors"
               >
                 <Pencil size={16} />
                 Editar orden
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Gestionar (manage alert) modal */}
+      {gestionTarget && (
+        <div
+          className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 px-4 backdrop-blur-sm"
+          onClick={() => setGestionTarget(null)}
+        >
+          <div
+            className="bg-white rounded-2xl p-6 max-w-md w-full shadow-xl relative border border-gray-100 max-h-[85vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={() => setGestionTarget(null)}
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-100"
+              aria-label="Cerrar"
+            >
+              <X size={22} />
+            </button>
+
+            <h2 className="text-lg font-bold text-gray-900 mb-1">Gestionar alerta</h2>
+            <p className="text-sm text-gray-500 mb-5">
+              {gestionTarget.orden_no ? `Orden ${gestionTarget.orden_no} · ` : ''}
+              {[gestionTarget.nombre, gestionTarget.placa].filter(Boolean).join(' · ')}
+            </p>
+
+            <div className="space-y-3">
+              <button
+                disabled={gestionSaving}
+                onClick={() => gestionar('llamado_rechazado')}
+                className="w-full text-left flex items-start gap-3 p-3 rounded-xl border border-gray-200 hover:bg-orange-50 hover:border-orange-200 transition-colors disabled:opacity-50"
+              >
+                <Phone className="h-5 w-5 text-orange-500 mt-0.5 flex-shrink-0" />
+                <div>
+                  <div className="text-sm font-medium text-gray-900">Llamé — el cliente rechazó</div>
+                  <div className="text-xs text-gray-500">Seguir alertando en el futuro.</div>
+                </div>
+              </button>
+
+              <button
+                disabled={gestionSaving}
+                onClick={() => gestionar('no_llamar')}
+                className="w-full text-left flex items-start gap-3 p-3 rounded-xl border border-gray-200 hover:bg-red-50 hover:border-red-200 transition-colors disabled:opacity-50"
+              >
+                <PhoneOff className="h-5 w-5 text-red-500 mt-0.5 flex-shrink-0" />
+                <div>
+                  <div className="text-sm font-medium text-gray-900">No volver a llamar</div>
+                  <div className="text-xs text-gray-500">Quitar de las alertas.</div>
+                </div>
+              </button>
+
+              <div className="p-3 rounded-xl border border-gray-200">
+                <div className="flex items-start gap-3 mb-2">
+                  <CalendarPlus className="h-5 w-5 text-blue-500 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <div className="text-sm font-medium text-gray-900">Programar nueva revisión</div>
+                    <div className="text-xs text-gray-500">Se mostrará en Revisiones programadas.</div>
+                  </div>
+                </div>
+                <div className="flex gap-2">
+                  <input
+                    type="date"
+                    value={gestionFecha}
+                    onChange={(e) => setGestionFecha(e.target.value)}
+                    className="flex-1 rounded-lg border border-gray-300 py-2 px-3 text-sm focus:ring-amber-500 focus:border-amber-500"
+                  />
+                  <button
+                    disabled={!gestionFecha || gestionSaving}
+                    onClick={() => gestionar('revision_programada', gestionFecha)}
+                    className="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Programar
+                  </button>
+                </div>
+              </div>
+
+              <button
+                onClick={() => prefillNewOrder(gestionTarget)}
+                className="w-full text-left flex items-start gap-3 p-3 rounded-xl border border-amber-200 bg-amber-50 hover:bg-amber-100 transition-colors"
+              >
+                <FilePlus className="h-5 w-5 text-amber-600 mt-0.5 flex-shrink-0" />
+                <div>
+                  <div className="text-sm font-medium text-gray-900">Crear nueva orden ahora</div>
+                  <div className="text-xs text-gray-600">Sin programar — formulario con datos del cliente y vehículo.</div>
+                </div>
               </button>
             </div>
           </div>

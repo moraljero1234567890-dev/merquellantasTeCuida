@@ -67,6 +67,15 @@ const REQUIRED_FIELDS: { key: string; label: string }[] = [
   { key: 'proximo_cambio_meses', label: 'Próximo cambio (meses)' },
 ];
 
+// Outcomes when an alert is managed ("gestionada"):
+//   llamado_rechazado  -> contacted, client declined, KEEP alerting
+//   no_llamar          -> stop alerting entirely
+//   revision_programada-> a new revision is scheduled (moves to that list)
+//   atendida           -> handled/closed, hidden from alerts and revisiones
+const GESTION_TIPOS = ['llamado_rechazado', 'no_llamar', 'revision_programada', 'atendida'];
+// Gestión states that should NOT appear in the active alerts list.
+const GESTION_HIDDEN_FROM_ALERTAS = ['no_llamar', 'revision_programada', 'atendida'];
+
 interface ServicioLinea {
   servicio: string;
   referencia: string; // '' | 'sencilla' | 'doble'
@@ -155,6 +164,14 @@ function computeProximoCambioFecha(fecha: string, meses: string, fallbackBase: D
     if (!Number.isNaN(parsed.getTime())) base = parsed;
   }
   return addMonths(base, m);
+}
+
+// Parse a plain YYYY-MM-DD string into a local Date, or null if invalid.
+function parseDateOnly(s: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (!m) return null;
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return Number.isNaN(d.getTime()) ? null : d;
 }
 
 // Totals are derived, never trusted from the client: subtotal = sum of the
@@ -265,18 +282,40 @@ export async function GET(req: NextRequest) {
     return NextResponse.json([]);
   }
 
-  // Alerts view: only orders that have a computed next-change date, sorted by
-  // it ascending and paginated so we never load everything at once.
+  // Alerts view: orders with a computed next-change date that haven't been
+  // closed/scheduled away, sorted ascending (most overdue first) and paginated.
   if (searchParams.get('alertas') === 'true') {
     const page = Math.max(1, parseInt(searchParams.get('page') || '1') || 1);
     const pageSize = Math.max(1, Math.min(parseInt(searchParams.get('pageSize') || '20') || 20, 100));
-    const filter = { proximo_cambio_fecha: { $ne: null } };
+    const filter = {
+      proximo_cambio_fecha: { $ne: null },
+      gestion_tipo: { $nin: GESTION_HIDDEN_FROM_ALERTAS },
+    };
 
     const total = await db.collection(COLLECTION).countDocuments(filter);
     const results = await db
       .collection(COLLECTION)
       .find(filter)
       .sort({ proximo_cambio_fecha: 1 })
+      .skip((page - 1) * pageSize)
+      .limit(pageSize)
+      .toArray();
+
+    return NextResponse.json({ results, total, page, pageSize });
+  }
+
+  // Scheduled-revisions view: orders marked with a programmed revision, sorted
+  // by the scheduled date ascending, paginated.
+  if (searchParams.get('revisiones') === 'true') {
+    const page = Math.max(1, parseInt(searchParams.get('page') || '1') || 1);
+    const pageSize = Math.max(1, Math.min(parseInt(searchParams.get('pageSize') || '20') || 20, 100));
+    const filter = { gestion_tipo: 'revision_programada' };
+
+    const total = await db.collection(COLLECTION).countDocuments(filter);
+    const results = await db
+      .collection(COLLECTION)
+      .find(filter)
+      .sort({ gestion_fecha: 1 })
       .skip((page - 1) * pageSize)
       .limit(pageSize)
       .toArray();
@@ -406,4 +445,49 @@ export async function PUT(req: NextRequest) {
   await db.collection(COLLECTION).updateOne({ _id: new ObjectId(id) }, { $set: update });
 
   return NextResponse.json({ success: true, orden_no: update.orden_no });
+}
+
+// PATCH /api/lubricentros — manage ("gestionar") an order's alert. Sets the
+// gestión outcome and, for a programmed revision, its scheduled date.
+export async function PATCH(req: NextRequest) {
+  const session = await auth();
+  if (!session) return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
+  if (session.user.rol === 'externo') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
+
+  const body = await req.json().catch(() => ({}));
+  const id = body.id;
+  if (!id || !ObjectId.isValid(id)) {
+    return NextResponse.json({ error: 'ID inválido' }, { status: 400 });
+  }
+
+  const tipo = clean(body.gestion_tipo);
+  if (!GESTION_TIPOS.includes(tipo)) {
+    return NextResponse.json({ error: 'Gestión inválida' }, { status: 400 });
+  }
+
+  const set: Record<string, unknown> = {
+    gestion_tipo: tipo,
+    gestion_nota: clean(body.gestion_nota),
+    gestion_updated_at: new Date(),
+    gestion_updated_by: session.user.id,
+    gestion_updated_por_nombre: session.user.nombre || null,
+  };
+
+  if (tipo === 'revision_programada') {
+    const fecha = parseDateOnly(clean(body.gestion_fecha));
+    if (!fecha) {
+      return NextResponse.json({ error: 'Fecha de revisión inválida' }, { status: 400 });
+    }
+    set.gestion_fecha = fecha;
+  } else {
+    set.gestion_fecha = null;
+  }
+
+  const db = await getDb();
+  const result = await db.collection(COLLECTION).updateOne({ _id: new ObjectId(id) }, { $set: set });
+  if (result.matchedCount === 0) {
+    return NextResponse.json({ error: 'Orden no encontrada' }, { status: 404 });
+  }
+
+  return NextResponse.json({ success: true });
 }
