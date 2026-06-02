@@ -61,6 +61,7 @@ interface ServicioLinea {
   unidad: string;
   valor_unitario: string;
   subtotal: string;
+  exento_iva: boolean; // lubricants: counted in total, excluded from IVA base
 }
 
 // Plain text fields on the order. Everything starts empty; nothing is required.
@@ -91,10 +92,14 @@ const emptyFields = {
 
 type Fields = typeof emptyFields;
 
-// Local YYYY-MM-DD, used to default <input type="date"> to today.
-function todayStr(): string {
-  const d = new Date();
+// Format a Date as local YYYY-MM-DD for <input type="date">.
+function dateToInput(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+// Local YYYY-MM-DD for today.
+function todayStr(): string {
+  return dateToInput(new Date());
 }
 
 // Fresh form values: everything blank except Fecha, which defaults to today
@@ -193,6 +198,7 @@ const emptyServicios = (): ServicioLinea[] =>
     unidad: '',
     valor_unitario: '',
     subtotal: '',
+    exento_iva: false,
   }));
 
 // Small labelled text input used across the form.
@@ -219,7 +225,7 @@ function Field({
         type={type}
         value={value}
         onChange={(e) => onChange(e.target.value)}
-        className="block w-full rounded-lg border border-gray-300 shadow-sm focus:ring-amber-500 focus:border-amber-500 py-2 px-3 text-sm"
+        className="block w-full rounded-lg border border-gray-300 shadow-sm focus:ring-amber-500 focus:border-amber-500 py-2 px-3 text-sm text-gray-900"
       />
     </label>
   );
@@ -269,7 +275,7 @@ function Autocomplete({
           }}
           onFocus={() => setOpen(true)}
           onBlur={() => setTimeout(() => setOpen(false), 150)}
-          className="block w-full rounded-lg border border-gray-300 shadow-sm focus:ring-amber-500 focus:border-amber-500 py-2 px-3 text-sm"
+          className="block w-full rounded-lg border border-gray-300 shadow-sm focus:ring-amber-500 focus:border-amber-500 py-2 px-3 text-sm text-gray-900"
         />
       </label>
       {open && options.length > 0 && (
@@ -441,6 +447,9 @@ export default function LubricentrosPage() {
       }),
     );
 
+  const toggleExento = (i: number) =>
+    setServicios((rows) => rows.map((r, idx) => (idx === i ? { ...r, exento_iva: !r.exento_iva } : r)));
+
   // Fill the whole client / vehicle block from a chosen suggestion. Vehicle fill
   // never touches km_actual — the latest reading must always be entered.
   const fillCliente = (s: ClienteSug) =>
@@ -487,6 +496,7 @@ export default function LubricentrosPage() {
           unidad: s.unidad || '',
           valor_unitario: s.valor_unitario || '',
           subtotal: s.subtotal || '',
+          exento_iva: !!s.exento_iva,
         };
       }
     });
@@ -659,8 +669,22 @@ export default function LubricentrosPage() {
 
   // ---- Manage ("gestionar") an alert ----
   const [gestionTarget, setGestionTarget] = useState<Orden | null>(null);
-  const [gestionFecha, setGestionFecha] = useState('');
+  const [gestionFecha, setGestionFecha] = useState(''); // programmed-revision date
+  const [gestionRecordar, setGestionRecordar] = useState(''); // "remind me again" date
   const [gestionSaving, setGestionSaving] = useState(false);
+
+  // Default remind date: today + the order's interval (falls back to today).
+  const defaultRecordar = (o: Orden) => {
+    const m = parseInt(o.proximo_cambio_meses || '', 10);
+    return dateToInput(Number.isFinite(m) ? addMonths(new Date(), m) : new Date());
+  };
+
+  // Open the manage modal for an order, seeding the date inputs.
+  const openGestion = (o: Orden) => {
+    setGestionTarget(o);
+    setGestionFecha('');
+    setGestionRecordar(defaultRecordar(o));
+  };
 
   const gestionar = async (tipo: string, fecha?: string) => {
     if (!gestionTarget) return;
@@ -705,9 +729,14 @@ export default function LubricentrosPage() {
 
   const formatMoney = (n: number) => `$ ${new Intl.NumberFormat('es-CO').format(n)}`;
 
-  // Totals derived live from the service rows (mirrors the server).
+  // Totals derived live from the service rows (mirrors the server). Lubricants
+  // (exento_iva) count toward subtotal/total but not the IVA base.
   const totalSubtotal = servicios.reduce((sum, r) => sum + (parseInt(r.subtotal, 10) || 0), 0);
-  const totalIva = Math.round(totalSubtotal * 0.19);
+  const totalIvaBase = servicios.reduce(
+    (sum, r) => sum + (r.exento_iva ? 0 : parseInt(r.subtotal, 10) || 0),
+    0,
+  );
+  const totalIva = Math.round(totalIvaBase * 0.19);
   const totalTotal = totalSubtotal + totalIva;
 
   const formatDate = (date: string) =>
@@ -931,7 +960,7 @@ export default function LubricentrosPage() {
                 <p className="text-xs text-gray-400 mb-4">
                   Opcional. Alineación usa referencia sencilla/doble; en los demás escribe el producto/referencia
                   aplicado. Unidad y valor unitario son enteros; el subtotal (unidad × valor) y los totales se
-                  calculan solos.
+                  calculan solos. Marca <strong>Exento IVA</strong> en lubricantes (suman al total pero no pagan IVA).
                 </p>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
@@ -941,7 +970,8 @@ export default function LubricentrosPage() {
                         <th className="py-2 px-2 font-medium">Referencia</th>
                         <th className="py-2 px-2 font-medium">Unidad</th>
                         <th className="py-2 px-2 font-medium">Valor unitario</th>
-                        <th className="py-2 pl-2 font-medium">Subtotal</th>
+                        <th className="py-2 px-2 font-medium">Subtotal</th>
+                        <th className="py-2 pl-2 font-medium whitespace-nowrap">Exento IVA</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -976,7 +1006,7 @@ export default function LubricentrosPage() {
                                 }}
                                 placeholder="Producto / referencia"
                                 autoComplete="off"
-                                className="w-44 rounded border border-gray-300 py-1 px-2 text-sm focus:ring-amber-500 focus:border-amber-500"
+                                className="w-44 rounded border border-gray-300 py-1 px-2 text-sm text-gray-900 focus:ring-amber-500 focus:border-amber-500"
                               />
                             )}
                           </td>
@@ -987,7 +1017,7 @@ export default function LubricentrosPage() {
                               step="1"
                               value={row.unidad}
                               onChange={(e) => setServicio(i, 'unidad', e.target.value)}
-                              className="w-20 rounded border border-gray-300 py-1 px-2 text-sm focus:ring-amber-500 focus:border-amber-500"
+                              className="w-20 rounded border border-gray-300 py-1 px-2 text-sm text-gray-900 focus:ring-amber-500 focus:border-amber-500"
                             />
                           </td>
                           <td className="py-2 px-2">
@@ -997,13 +1027,22 @@ export default function LubricentrosPage() {
                               step="1"
                               value={row.valor_unitario}
                               onChange={(e) => setServicio(i, 'valor_unitario', e.target.value)}
-                              className="w-28 rounded border border-gray-300 py-1 px-2 text-sm focus:ring-amber-500 focus:border-amber-500"
+                              className="w-28 rounded border border-gray-300 py-1 px-2 text-sm text-gray-900 focus:ring-amber-500 focus:border-amber-500"
                             />
                           </td>
-                          <td className="py-2 pl-2">
+                          <td className="py-2 px-2">
                             <div className="w-28 py-1 px-2 text-sm text-gray-900">
                               {row.subtotal ? formatMoney(parseInt(row.subtotal, 10) || 0) : '—'}
                             </div>
+                          </td>
+                          <td className="py-2 pl-2 text-center">
+                            <input
+                              type="checkbox"
+                              checked={row.exento_iva}
+                              onChange={() => toggleExento(i)}
+                              className="h-4 w-4 accent-amber-500 cursor-pointer"
+                              aria-label={`Exento de IVA: ${row.servicio}`}
+                            />
                           </td>
                         </tr>
                       ))}
@@ -1027,7 +1066,7 @@ export default function LubricentrosPage() {
                       rows={5}
                       value={fields.observaciones}
                       onChange={(e) => setField('observaciones', e.target.value)}
-                      className="block w-full rounded-lg border border-gray-300 shadow-sm focus:ring-amber-500 focus:border-amber-500 py-2 px-3 text-sm resize-y h-full"
+                      className="block w-full rounded-lg border border-gray-300 shadow-sm focus:ring-amber-500 focus:border-amber-500 py-2 px-3 text-sm text-gray-900 resize-y h-full"
                     />
                   </label>
                   <div>
@@ -1080,7 +1119,7 @@ export default function LubricentrosPage() {
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
                   placeholder="Buscar por nombre, cédula, placa, factura, servicio, asesor..."
-                  className="block w-full rounded-2xl border border-gray-300 shadow-sm focus:ring-amber-500 focus:border-amber-500 py-3.5 pl-12 pr-4 text-sm"
+                  className="block w-full rounded-2xl border border-gray-300 shadow-sm focus:ring-amber-500 focus:border-amber-500 py-3.5 pl-12 pr-4 text-sm text-gray-900"
                 />
               </div>
 
@@ -1200,10 +1239,7 @@ export default function LubricentrosPage() {
                             </p>
                           </div>
                           <button
-                            onClick={() => {
-                              setGestionTarget(o);
-                              setGestionFecha('');
-                            }}
+                            onClick={() => openGestion(o)}
                             className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-amber-500 text-white text-xs font-medium hover:bg-amber-600 transition-colors"
                           >
                             <Settings2 size={14} /> Gestionar
@@ -1458,25 +1494,37 @@ export default function LubricentrosPage() {
             </button>
 
             <h2 className="text-lg font-bold text-gray-900 mb-1">Gestionar alerta</h2>
-            <p className="text-sm text-gray-500 mb-5">
+            <p className="text-sm text-gray-700 mb-5">
               {gestionTarget.orden_no ? `Orden ${gestionTarget.orden_no} · ` : ''}
               {[gestionTarget.nombre, gestionTarget.placa].filter(Boolean).join(' · ')}
             </p>
 
             <div className="space-y-3">
-              <button
-                disabled={gestionSaving}
-                onClick={() => gestionar('llamado_rechazado')}
-                className="w-full text-left flex items-start gap-3 p-3 rounded-xl border border-gray-200 hover:bg-orange-50 hover:border-orange-200 transition-colors disabled:opacity-50"
-              >
-                <Phone className="h-5 w-5 text-orange-500 mt-0.5 flex-shrink-0" />
-                <div>
-                  <div className="text-sm font-medium text-gray-900">Llamé — el cliente rechazó</div>
-                  <div className="text-xs text-gray-500">
-                    Reprograma la próxima alerta (+{gestionTarget.proximo_cambio_meses || '—'} meses).
+              {/* Called, rejected — choose the day to be reminded again */}
+              <div className="p-3 rounded-xl border border-orange-200 bg-orange-50">
+                <div className="flex items-start gap-3 mb-2">
+                  <Phone className="h-5 w-5 text-orange-500 mt-0.5 flex-shrink-0" />
+                  <div>
+                    <div className="text-sm font-medium text-gray-900">Llamé — el cliente rechazó</div>
+                    <div className="text-xs text-gray-700">Sigue en alertas; elige cuándo recordar de nuevo.</div>
                   </div>
                 </div>
-              </button>
+                <div className="flex gap-2">
+                  <input
+                    type="date"
+                    value={gestionRecordar}
+                    onChange={(e) => setGestionRecordar(e.target.value)}
+                    className="flex-1 rounded-lg border border-gray-300 py-2 px-3 text-sm text-gray-900 focus:ring-amber-500 focus:border-amber-500"
+                  />
+                  <button
+                    disabled={!gestionRecordar || gestionSaving}
+                    onClick={() => gestionar('llamado_rechazado', gestionRecordar)}
+                    className="px-4 py-2 rounded-lg bg-orange-500 text-white text-sm font-medium hover:bg-orange-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Recordar
+                  </button>
+                </div>
+              </div>
 
               <button
                 disabled={gestionSaving}
@@ -1486,16 +1534,16 @@ export default function LubricentrosPage() {
                 <PhoneOff className="h-5 w-5 text-red-500 mt-0.5 flex-shrink-0" />
                 <div>
                   <div className="text-sm font-medium text-gray-900">No volver a llamar</div>
-                  <div className="text-xs text-gray-500">Quitar de las alertas.</div>
+                  <div className="text-xs text-gray-700">Quitar de las alertas.</div>
                 </div>
               </button>
 
-              <div className="p-3 rounded-xl border border-gray-200">
+              <div className="p-3 rounded-xl border border-blue-200 bg-blue-50">
                 <div className="flex items-start gap-3 mb-2">
                   <CalendarPlus className="h-5 w-5 text-blue-500 mt-0.5 flex-shrink-0" />
                   <div>
                     <div className="text-sm font-medium text-gray-900">Programar nueva revisión</div>
-                    <div className="text-xs text-gray-500">Se mostrará en Revisiones programadas.</div>
+                    <div className="text-xs text-gray-700">Se mostrará en Revisiones programadas.</div>
                   </div>
                 </div>
                 <div className="flex gap-2">
@@ -1503,7 +1551,7 @@ export default function LubricentrosPage() {
                     type="date"
                     value={gestionFecha}
                     onChange={(e) => setGestionFecha(e.target.value)}
-                    className="flex-1 rounded-lg border border-gray-300 py-2 px-3 text-sm focus:ring-amber-500 focus:border-amber-500"
+                    className="flex-1 rounded-lg border border-gray-300 py-2 px-3 text-sm text-gray-900 focus:ring-amber-500 focus:border-amber-500"
                   />
                   <button
                     disabled={!gestionFecha || gestionSaving}
@@ -1522,7 +1570,7 @@ export default function LubricentrosPage() {
                 <FilePlus className="h-5 w-5 text-amber-600 mt-0.5 flex-shrink-0" />
                 <div>
                   <div className="text-sm font-medium text-gray-900">Crear nueva orden ahora</div>
-                  <div className="text-xs text-gray-600">Sin programar — formulario con datos del cliente y vehículo.</div>
+                  <div className="text-xs text-gray-700">Sin programar — formulario con datos del cliente y vehículo.</div>
                 </div>
               </button>
             </div>

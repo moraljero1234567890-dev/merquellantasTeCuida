@@ -82,6 +82,7 @@ interface ServicioLinea {
   unidad: string;
   valor_unitario: string;
   subtotal: string;
+  exento_iva: boolean; // lubricants are IVA-exempt: counted in total, not in IVA base
 }
 
 function clean(v: unknown): string {
@@ -110,6 +111,7 @@ function normalizeServicios(body: { servicios?: unknown }): ServicioLinea[] {
         unidad,
         valor_unitario,
         subtotal: u && v ? String(u * v) : '',
+        exento_iva: !!s?.exento_iva,
       };
     })
     .filter(
@@ -174,11 +176,20 @@ function parseDateOnly(s: string): Date | null {
   return Number.isNaN(d.getTime()) ? null : d;
 }
 
-// Totals are derived, never trusted from the client: subtotal = sum of the
-// service line subtotals, IVA = 19% of that, total = subtotal + IVA.
+// Totals are derived, never trusted from the client. Lubricants (exento_iva)
+// count toward the subtotal/total but NOT the IVA base:
+//   subtotal = sum of all line subtotals
+//   IVA      = 19% of the non-exempt subtotals only
+//   total    = subtotal + IVA
 function computeTotals(servicios: ServicioLinea[]): { subtotal: number; iva: number; total: number } {
-  const subtotal = servicios.reduce((sum, s) => sum + (parseInt(s.subtotal, 10) || 0), 0);
-  const iva = Math.round(subtotal * 0.19);
+  let subtotal = 0;
+  let ivaBase = 0;
+  for (const s of servicios) {
+    const v = parseInt(s.subtotal, 10) || 0;
+    subtotal += v;
+    if (!s.exento_iva) ivaBase += v;
+  }
+  const iva = Math.round(ivaBase * 0.19);
   return { subtotal, iva, total: subtotal + iva };
 }
 
@@ -489,17 +500,22 @@ export async function PATCH(req: NextRequest) {
     set.gestion_fecha = null;
   }
 
-  // "Called, rejected, keep alerting" reschedules the next-change date forward
-  // by the order's interval so it re-surfaces next cycle instead of staying
-  // overdue. Base = whichever is later of today / the current next-change date.
+  // "Called, rejected, keep alerting": the alert re-surfaces on the chosen
+  // remind date. If none was given, fall back to pushing the next-change date
+  // forward by the order's interval (base = later of today / current date).
   if (tipo === 'llamado_rechazado') {
-    const meses = parseInt(clean(existing.proximo_cambio_meses), 10);
-    if (Number.isFinite(meses)) {
-      const now = new Date();
-      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-      const current = existing.proximo_cambio_fecha instanceof Date ? existing.proximo_cambio_fecha : null;
-      const base = current && current > today ? current : today;
-      set.proximo_cambio_fecha = addMonths(base, meses);
+    const chosen = parseDateOnly(clean(body.gestion_fecha));
+    if (chosen) {
+      set.proximo_cambio_fecha = chosen;
+    } else {
+      const meses = parseInt(clean(existing.proximo_cambio_meses), 10);
+      if (Number.isFinite(meses)) {
+        const now = new Date();
+        const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+        const current = existing.proximo_cambio_fecha instanceof Date ? existing.proximo_cambio_fecha : null;
+        const base = current && current > today ? current : today;
+        set.proximo_cambio_fecha = addMonths(base, meses);
+      }
     }
   }
 
