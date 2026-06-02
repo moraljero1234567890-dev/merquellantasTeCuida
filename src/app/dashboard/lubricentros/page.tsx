@@ -40,7 +40,14 @@ const SERVICIOS = [
   'Otros',
 ];
 
-const FORMAS_PAGO = ['Crédito', 'Tarjeta', 'Efectivo'];
+const FORMAS_PAGO = [
+  'Solunion',
+  'Mundo Financiera',
+  'Crédito Directo',
+  'Crédito',
+  'Tarjeta',
+  'Efectivo',
+];
 
 interface ServicioLinea {
   servicio: string;
@@ -94,6 +101,24 @@ interface Orden extends Fields {
   created_at: string;
   created_by_nombre?: string | null;
   proximo_cambio_fecha?: string | null;
+}
+
+// Shapes returned by the autocomplete suggestion endpoints.
+interface ClienteSug {
+  cedula_nit: string;
+  nombre: string;
+  fecha_cumpleanos: string;
+  direccion: string;
+  celular: string;
+  correo: string;
+  cliente: string;
+}
+interface VehiculoSug {
+  placa: string;
+  marca: string;
+  tipo: string;
+  frec_cambio_km: string;
+  proximo_cambio_meses: string;
 }
 
 const ALERTAS_PAGE_SIZE = 20;
@@ -191,6 +216,45 @@ function Field({
   );
 }
 
+// Labelled input backed by a native <datalist> so suggestions appear without
+// any custom overlay — sidesteps z-index/clipping issues entirely.
+function AutocompleteField({
+  label,
+  value,
+  onChange,
+  required = false,
+  listId,
+  options,
+}: {
+  label: string;
+  value: string;
+  onChange: (v: string) => void;
+  required?: boolean;
+  listId: string;
+  options: { value: string; label?: string }[];
+}) {
+  return (
+    <label className="block">
+      <span className="block text-xs font-medium text-gray-500 mb-1">
+        {label}
+        {required && <span className="text-red-500"> *</span>}
+      </span>
+      <input
+        list={listId}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        autoComplete="off"
+        className="block w-full rounded-lg border border-gray-300 shadow-sm focus:ring-amber-500 focus:border-amber-500 py-2 px-3 text-sm"
+      />
+      <datalist id={listId}>
+        {options.map((o) => (
+          <option key={o.value} value={o.value} label={o.label} />
+        ))}
+      </datalist>
+    </label>
+  );
+}
+
 export default function LubricentrosPage() {
   const { data: session } = useSession();
   const [tab, setTab] = useState<'nueva' | 'buscar' | 'alertas'>('nueva');
@@ -225,6 +289,97 @@ export default function LubricentrosPage() {
   useEffect(() => {
     fetchNextNo();
   }, [fetchNextNo]);
+
+  // ---- Autocomplete suggestions (reuse existing client / vehicle / product data) ----
+  const [clienteSugs, setClienteSugs] = useState<ClienteSug[]>([]);
+  const [vehiculoSugs, setVehiculoSugs] = useState<VehiculoSug[]>([]);
+  const [productoSugs, setProductoSugs] = useState<string[]>([]);
+  const [productoQuery, setProductoQuery] = useState('');
+
+  // As the cédula is typed, suggest matching customers; when it exactly matches
+  // an existing one (e.g. picked from the list), pull that customer's data.
+  // Skipped while editing so we don't clobber the order being edited.
+  useEffect(() => {
+    const q = fields.cedula_nit.trim();
+    if (!q) {
+      setClienteSugs([]);
+      return;
+    }
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/lubricentros?suggest=cliente&q=${encodeURIComponent(q)}`);
+        if (!res.ok) return;
+        const list: ClienteSug[] = await res.json();
+        setClienteSugs(list);
+        if (editingId) return;
+        const exact = list.find((s) => s.cedula_nit.toLowerCase() === q.toLowerCase());
+        if (exact) {
+          setFields((f) => ({
+            ...f,
+            nombre: exact.nombre,
+            fecha_cumpleanos: exact.fecha_cumpleanos,
+            direccion: exact.direccion,
+            celular: exact.celular,
+            correo: exact.correo,
+            cliente: exact.cliente,
+          }));
+        }
+      } catch {
+        // ignore
+      }
+    }, 250);
+    return () => clearTimeout(t);
+  }, [fields.cedula_nit, editingId]);
+
+  // Same idea for the plate — fill the vehicle block on an exact match, but
+  // never KM actual (the person must always enter the latest reading).
+  useEffect(() => {
+    const q = fields.placa.trim();
+    if (!q) {
+      setVehiculoSugs([]);
+      return;
+    }
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/lubricentros?suggest=vehiculo&q=${encodeURIComponent(q)}`);
+        if (!res.ok) return;
+        const list: VehiculoSug[] = await res.json();
+        setVehiculoSugs(list);
+        if (editingId) return;
+        const exact = list.find((s) => s.placa.toUpperCase() === q.toUpperCase());
+        if (exact) {
+          setFields((f) => ({
+            ...f,
+            marca: exact.marca,
+            tipo: exact.tipo,
+            frec_cambio_km: exact.frec_cambio_km,
+            proximo_cambio_meses: exact.proximo_cambio_meses,
+          }));
+        }
+      } catch {
+        // ignore
+      }
+    }, 250);
+    return () => clearTimeout(t);
+  }, [fields.placa, editingId]);
+
+  // Product suggestions for the open-text service rows.
+  useEffect(() => {
+    const q = productoQuery.trim();
+    if (!q) {
+      setProductoSugs([]);
+      return;
+    }
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/lubricentros?suggest=producto&q=${encodeURIComponent(q)}`);
+        if (res.ok) setProductoSugs(await res.json());
+      } catch {
+        // ignore
+      }
+    }, 250);
+    return () => clearTimeout(t);
+  }, [productoQuery]);
 
   const setField = (key: keyof Fields, value: string) =>
     setFields((f) => ({ ...f, [key]: value }));
@@ -371,6 +526,13 @@ export default function LubricentrosPage() {
     new Intl.DateTimeFormat('es-CO', { year: 'numeric', month: 'long', day: 'numeric' }).format(
       new Date(date),
     );
+
+  const formatMoney = (n: number) => `$ ${new Intl.NumberFormat('es-CO').format(n)}`;
+
+  // Totals derived live from the service rows (mirrors the server).
+  const totalSubtotal = servicios.reduce((sum, r) => sum + (parseInt(r.subtotal, 10) || 0), 0);
+  const totalIva = Math.round(totalSubtotal * 0.19);
+  const totalTotal = totalSubtotal + totalIva;
 
   const formatDate = (date: string) =>
     new Intl.DateTimeFormat('es-CO', {
@@ -527,7 +689,14 @@ export default function LubricentrosPage() {
                 </h2>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
                   <Field label="Nombre" value={fields.nombre} onChange={(v) => setField('nombre', v)} required />
-                  <Field label="Cédula y/o NIT" value={fields.cedula_nit} onChange={(v) => setField('cedula_nit', v)} required />
+                  <AutocompleteField
+                    label="Cédula y/o NIT"
+                    value={fields.cedula_nit}
+                    onChange={(v) => setField('cedula_nit', v)}
+                    required
+                    listId="cedula-list"
+                    options={clienteSugs.map((s) => ({ value: s.cedula_nit, label: s.nombre }))}
+                  />
                   <Field label="Fecha de cumpleaños" value={fields.fecha_cumpleanos} onChange={(v) => setField('fecha_cumpleanos', v)} />
                   <Field label="Dirección" value={fields.direccion} onChange={(v) => setField('direccion', v)} />
                   <Field label="Celular" value={fields.celular} onChange={(v) => setField('celular', v)} required />
@@ -542,7 +711,17 @@ export default function LubricentrosPage() {
                   <Car size={18} className="text-amber-500" /> Vehículo
                 </h2>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  <Field label="Placa" value={fields.placa} onChange={(v) => setField('placa', v)} required />
+                  <AutocompleteField
+                    label="Placa"
+                    value={fields.placa}
+                    onChange={(v) => setField('placa', v.toUpperCase())}
+                    required
+                    listId="placa-list"
+                    options={vehiculoSugs.map((s) => ({
+                      value: s.placa,
+                      label: [s.marca, s.tipo].filter(Boolean).join(' '),
+                    }))}
+                  />
                   <Field label="Marca" value={fields.marca} onChange={(v) => setField('marca', v)} required />
                   <Field label="Tipo" value={fields.tipo} onChange={(v) => setField('tipo', v)} required />
                   <Field label="KM actual vehículo" value={fields.km_actual} onChange={(v) => setField('km_actual', v)} required />
@@ -568,7 +747,8 @@ export default function LubricentrosPage() {
                   <Wrench size={18} className="text-amber-500" /> Servicios
                 </h2>
                 <p className="text-xs text-gray-400 mb-4">
-                  Opcional. Marca la referencia (sencilla/doble) y los valores de los servicios aplicados.
+                  Opcional. Alineación usa referencia sencilla/doble; en los demás escribe el producto/referencia
+                  aplicado. El subtotal es un valor entero y los totales se calculan solos.
                 </p>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
@@ -586,22 +766,36 @@ export default function LubricentrosPage() {
                         <tr key={row.servicio} className="border-b border-gray-100 last:border-0">
                           <td className="py-2 pr-3 text-gray-700 whitespace-nowrap">{row.servicio}</td>
                           <td className="py-2 px-2">
-                            <div className="flex gap-1">
-                              {['sencilla', 'doble'].map((ref) => (
-                                <button
-                                  type="button"
-                                  key={ref}
-                                  onClick={() => setServicio(i, 'referencia', row.referencia === ref ? '' : ref)}
-                                  className={`px-2 py-1 rounded text-xs border capitalize transition-colors ${
-                                    row.referencia === ref
-                                      ? 'bg-amber-500 text-white border-amber-500'
-                                      : 'bg-white text-gray-500 border-gray-300 hover:bg-gray-50'
-                                  }`}
-                                >
-                                  {ref}
-                                </button>
-                              ))}
-                            </div>
+                            {row.servicio === 'Alineación' ? (
+                              <div className="flex gap-1">
+                                {['sencilla', 'doble'].map((ref) => (
+                                  <button
+                                    type="button"
+                                    key={ref}
+                                    onClick={() => setServicio(i, 'referencia', row.referencia === ref ? '' : ref)}
+                                    className={`px-2 py-1 rounded text-xs border capitalize transition-colors ${
+                                      row.referencia === ref
+                                        ? 'bg-amber-500 text-white border-amber-500'
+                                        : 'bg-white text-gray-500 border-gray-300 hover:bg-gray-50'
+                                    }`}
+                                  >
+                                    {ref}
+                                  </button>
+                                ))}
+                              </div>
+                            ) : (
+                              <input
+                                list="producto-list"
+                                value={row.referencia}
+                                onChange={(e) => {
+                                  setServicio(i, 'referencia', e.target.value);
+                                  setProductoQuery(e.target.value);
+                                }}
+                                placeholder="Producto / referencia"
+                                autoComplete="off"
+                                className="w-44 rounded border border-gray-300 py-1 px-2 text-sm focus:ring-amber-500 focus:border-amber-500"
+                              />
+                            )}
                           </td>
                           <td className="py-2 px-2">
                             <input
@@ -619,6 +813,9 @@ export default function LubricentrosPage() {
                           </td>
                           <td className="py-2 pl-2">
                             <input
+                              type="number"
+                              min="0"
+                              step="1"
                               value={row.subtotal}
                               onChange={(e) => setServicio(i, 'subtotal', e.target.value)}
                               className="w-28 rounded border border-gray-300 py-1 px-2 text-sm focus:ring-amber-500 focus:border-amber-500"
@@ -629,6 +826,12 @@ export default function LubricentrosPage() {
                     </tbody>
                   </table>
                 </div>
+                {/* Shared product suggestions for the open-text service rows. */}
+                <datalist id="producto-list">
+                  {productoSugs.map((p) => (
+                    <option key={p} value={p} />
+                  ))}
+                </datalist>
               </section>
 
               {/* Totales y observaciones */}
@@ -643,9 +846,24 @@ export default function LubricentrosPage() {
                       className="block w-full rounded-lg border border-gray-300 shadow-sm focus:ring-amber-500 focus:border-amber-500 py-2 px-3 text-sm resize-y h-full"
                     />
                   </label>
-                  <Field label="Subtotal" value={fields.subtotal} onChange={(v) => setField('subtotal', v)} />
-                  <Field label="IVA" value={fields.iva} onChange={(v) => setField('iva', v)} />
-                  <Field label="Total" value={fields.total} onChange={(v) => setField('total', v)} />
+                  <div>
+                    <span className="block text-xs font-medium text-gray-500 mb-1">Subtotal</span>
+                    <div className="rounded-lg border border-gray-200 bg-gray-50 py-2 px-3 text-sm text-gray-900">
+                      {formatMoney(totalSubtotal)}
+                    </div>
+                  </div>
+                  <div>
+                    <span className="block text-xs font-medium text-gray-500 mb-1">IVA (19%)</span>
+                    <div className="rounded-lg border border-gray-200 bg-gray-50 py-2 px-3 text-sm text-gray-900">
+                      {formatMoney(totalIva)}
+                    </div>
+                  </div>
+                  <div>
+                    <span className="block text-xs font-medium text-gray-500 mb-1">Total</span>
+                    <div className="rounded-lg border border-amber-200 bg-amber-50 py-2 px-3 text-sm font-semibold text-gray-900">
+                      {formatMoney(totalTotal)}
+                    </div>
+                  </div>
                 </div>
               </section>
 
@@ -911,9 +1129,9 @@ export default function LubricentrosPage() {
             )}
 
             <div className="mt-5 flex flex-wrap gap-x-8 gap-y-1 text-sm">
-              <span className="text-gray-500">Subtotal: <span className="text-gray-800">{detail.subtotal || '—'}</span></span>
-              <span className="text-gray-500">IVA: <span className="text-gray-800">{detail.iva || '—'}</span></span>
-              <span className="text-gray-500">Total: <span className="font-semibold text-gray-900">{detail.total || '—'}</span></span>
+              <span className="text-gray-500">Subtotal: <span className="text-gray-800">{detail.subtotal ? formatMoney(parseInt(detail.subtotal, 10) || 0) : '—'}</span></span>
+              <span className="text-gray-500">IVA: <span className="text-gray-800">{detail.iva ? formatMoney(parseInt(detail.iva, 10) || 0) : '—'}</span></span>
+              <span className="text-gray-500">Total: <span className="font-semibold text-gray-900">{detail.total ? formatMoney(parseInt(detail.total, 10) || 0) : '—'}</span></span>
             </div>
 
             <div className="mt-6 flex justify-end">

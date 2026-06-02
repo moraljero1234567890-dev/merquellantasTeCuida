@@ -150,6 +150,14 @@ function computeProximoCambioFecha(fecha: string, meses: string, fallbackBase: D
   return addMonths(base, m);
 }
 
+// Totals are derived, never trusted from the client: subtotal = sum of the
+// service line subtotals, IVA = 19% of that, total = subtotal + IVA.
+function computeTotals(servicios: ServicioLinea[]): { subtotal: number; iva: number; total: number } {
+  const subtotal = servicios.reduce((sum, s) => sum + (parseInt(s.subtotal, 10) || 0), 0);
+  const iva = Math.round(subtotal * 0.19);
+  return { subtotal, iva, total: subtotal + iva };
+}
+
 // GET /api/lubricentros
 //   - ?q=<text>      full-text search across every field (matches "anything")
 //   - ?limit=        cap search results (default 100, max 500)
@@ -173,6 +181,81 @@ export async function GET(req: NextRequest) {
       .findOne({ _id: 'lubricentro_orden' });
     const seq = (counter?.seq ?? 0) + 1;
     return NextResponse.json({ next: String(seq).padStart(6, '0') });
+  }
+
+  // Autocomplete suggestions used by the form to reuse existing data:
+  //   ?suggest=cliente&q=   distinct customers by cédula prefix (full client block)
+  //   ?suggest=vehiculo&q=  distinct vehicles by placa prefix (vehicle block, no KM)
+  //   ?suggest=producto&q=  distinct product/reference strings used in services
+  const suggest = searchParams.get('suggest');
+  if (suggest) {
+    const sq = (searchParams.get('q') || '').trim();
+    if (!sq) return NextResponse.json([]);
+    const esc = escapeRegex(sq);
+
+    if (suggest === 'cliente') {
+      const rows = await db
+        .collection(COLLECTION)
+        .aggregate([
+          { $match: { cedula_nit: { $regex: '^' + esc, $options: 'i' } } },
+          { $sort: { created_at: -1 } },
+          { $group: { _id: { $toLower: '$cedula_nit' }, doc: { $first: '$$ROOT' } } },
+          { $limit: 8 },
+        ])
+        .toArray();
+      return NextResponse.json(
+        rows.map((r) => ({
+          cedula_nit: clean(r.doc.cedula_nit),
+          nombre: clean(r.doc.nombre),
+          fecha_cumpleanos: clean(r.doc.fecha_cumpleanos),
+          direccion: clean(r.doc.direccion),
+          celular: clean(r.doc.celular),
+          correo: clean(r.doc.correo),
+          cliente: clean(r.doc.cliente),
+        })),
+      );
+    }
+
+    if (suggest === 'vehiculo') {
+      const rows = await db
+        .collection(COLLECTION)
+        .aggregate([
+          { $match: { placa: { $regex: '^' + esc, $options: 'i' } } },
+          { $sort: { created_at: -1 } },
+          { $group: { _id: { $toUpper: '$placa' }, doc: { $first: '$$ROOT' } } },
+          { $limit: 8 },
+        ])
+        .toArray();
+      return NextResponse.json(
+        rows.map((r) => ({
+          placa: clean(r.doc.placa).toUpperCase(),
+          marca: clean(r.doc.marca),
+          tipo: clean(r.doc.tipo),
+          frec_cambio_km: clean(r.doc.frec_cambio_km),
+          proximo_cambio_meses: clean(r.doc.proximo_cambio_meses),
+        })),
+      );
+    }
+
+    if (suggest === 'producto') {
+      const rows = await db
+        .collection(COLLECTION)
+        .aggregate([
+          { $unwind: '$servicios' },
+          {
+            $match: {
+              'servicios.servicio': { $ne: 'Alineación' },
+              'servicios.referencia': { $regex: esc, $options: 'i' },
+            },
+          },
+          { $group: { _id: { $toLower: '$servicios.referencia' }, val: { $first: '$servicios.referencia' } } },
+          { $limit: 8 },
+        ])
+        .toArray();
+      return NextResponse.json(rows.map((r) => clean(r.val)).filter(Boolean));
+    }
+
+    return NextResponse.json([]);
   }
 
   // Alerts view: only orders that have a computed next-change date, sorted by
@@ -218,6 +301,8 @@ export async function POST(req: NextRequest) {
 
   const doc: Record<string, unknown> = {};
   for (const f of TEXT_FIELDS) doc[f] = clean(body[f]);
+  // Plates are always stored uppercase so "abc123" and "ABC123" are one vehicle.
+  doc.placa = (doc.placa as string).toUpperCase();
 
   const missing = missingRequired(doc);
   if (missing.length) {
@@ -228,6 +313,10 @@ export async function POST(req: NextRequest) {
   }
 
   const servicios = normalizeServicios(body);
+  const totals = computeTotals(servicios);
+  doc.subtotal = String(totals.subtotal);
+  doc.iva = String(totals.iva);
+  doc.total = String(totals.total);
 
   const db = await getDb();
   const createdAt = new Date();
@@ -279,6 +368,8 @@ export async function PUT(req: NextRequest) {
   for (const f of TEXT_FIELDS) update[f] = clean(body[f]);
   // Order number is never editable — keep the one originally assigned.
   update.orden_no = clean(existing.orden_no);
+  // Plates are always stored uppercase.
+  update.placa = (update.placa as string).toUpperCase();
 
   const missing = missingRequired(update);
   if (missing.length) {
@@ -289,6 +380,10 @@ export async function PUT(req: NextRequest) {
   }
 
   const servicios = normalizeServicios(body);
+  const totals = computeTotals(servicios);
+  update.subtotal = String(totals.subtotal);
+  update.iva = String(totals.iva);
+  update.total = String(totals.total);
   const fallbackBase = existing.created_at instanceof Date ? existing.created_at : new Date();
 
   update.servicios = servicios;
