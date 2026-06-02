@@ -24,6 +24,8 @@ import {
   CalendarClock,
   FilePlus,
   Settings2,
+  Download,
+  Mail,
   X,
 } from 'lucide-react';
 
@@ -304,6 +306,81 @@ function Autocomplete({
   );
 }
 
+// PDF download + email actions for a saved order. Reused by the post-save modal
+// and the search/alerts detail view.
+function OrderActions({ id }: { id: string }) {
+  const [emailOpen, setEmailOpen] = useState(false);
+  const [to, setTo] = useState('');
+  const [sending, setSending] = useState(false);
+  const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+
+  const download = () => window.open(`/api/lubricentros/pdf?id=${id}`, '_blank');
+
+  const send = async () => {
+    setSending(true);
+    setMsg(null);
+    try {
+      const res = await fetch('/api/lubricentros/email', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id, to: to.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Error al enviar');
+      setMsg({ ok: true, text: `Enviado a ${to.trim()}` });
+      setTo('');
+      setEmailOpen(false);
+    } catch (e) {
+      setMsg({ ok: false, text: e instanceof Error ? e.message : 'Error al enviar' });
+    } finally {
+      setSending(false);
+    }
+  };
+
+  return (
+    <div className="space-y-2">
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={download}
+          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white border border-amber-300 text-amber-700 text-sm font-medium hover:bg-amber-50 transition-colors"
+        >
+          <Download size={16} /> Descargar PDF
+        </button>
+        <button
+          type="button"
+          onClick={() => setEmailOpen((v) => !v)}
+          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-white border border-gray-300 text-gray-700 text-sm font-medium hover:bg-gray-50 transition-colors"
+        >
+          <Mail size={16} /> Enviar por correo
+        </button>
+      </div>
+      {emailOpen && (
+        <div className="flex gap-2">
+          <input
+            type="email"
+            value={to}
+            onChange={(e) => setTo(e.target.value)}
+            placeholder="correo@ejemplo.com"
+            className="flex-1 rounded-lg border border-gray-300 py-2 px-3 text-sm text-gray-900 focus:ring-amber-500 focus:border-amber-500"
+          />
+          <button
+            type="button"
+            disabled={!to.trim() || sending}
+            onClick={send}
+            className="px-4 py-2 rounded-lg bg-amber-500 text-white text-sm font-medium hover:bg-amber-600 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+          >
+            {sending ? 'Enviando...' : 'Enviar'}
+          </button>
+        </div>
+      )}
+      {msg && (
+        <p className={`text-xs ${msg.ok ? 'text-emerald-600' : 'text-red-600'}`}>{msg.text}</p>
+      )}
+    </div>
+  );
+}
+
 export default function LubricentrosPage() {
   const { data: session } = useSession();
   const [tab, setTab] = useState<'nueva' | 'buscar' | 'alertas' | 'revisiones'>('nueva');
@@ -313,9 +390,8 @@ export default function LubricentrosPage() {
   const [servicios, setServicios] = useState<ServicioLinea[]>(emptyServicios());
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
-  const [saved, setSaved] = useState(false);
-  const [savedNo, setSavedNo] = useState<string | null>(null);
-  const [savedEdit, setSavedEdit] = useState(false);
+  // After a successful save, holds the order so we can offer PDF/email actions.
+  const [actionsOrder, setActionsOrder] = useState<{ id: string; ordenNo: string; edit: boolean } | null>(null);
   // When set, the form edits this existing order instead of creating a new one.
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingNo, setEditingNo] = useState<string | null>(null);
@@ -505,7 +581,7 @@ export default function LubricentrosPage() {
     setServicios(rows);
     setEditingId(o._id);
     setEditingNo(o.orden_no || null);
-    setSaved(false);
+    setActionsOrder(null);
     setSaveError(null);
     setDetail(null);
     setTab('nueva');
@@ -531,7 +607,7 @@ export default function LubricentrosPage() {
     setServicios(emptyServicios());
     setEditingId(null);
     setEditingNo(null);
-    setSaved(false);
+    setActionsOrder(null);
     setSaveError(null);
     setDetail(null);
     setGestionTarget(null);
@@ -572,9 +648,8 @@ export default function LubricentrosPage() {
       if (!res.ok) {
         throw new Error(data.error || 'Error al guardar');
       }
-      setSavedNo(data.orden_no || editingNo || null);
-      setSavedEdit(!!editing);
-      setSaved(true);
+      const savedId = editing || data.id;
+      setActionsOrder({ id: savedId, ordenNo: data.orden_no || editingNo || '', edit: !!editing });
       resetForm();
       // Refresh search results and the next-number preview in the background.
       runSearch(query);
@@ -767,15 +842,12 @@ export default function LubricentrosPage() {
       minute: '2-digit',
     }).format(new Date(date));
 
-  // Auto-dismiss the save toast after a few seconds.
+  // Auto-dismiss the error toast after a few seconds.
   useEffect(() => {
-    if (!saved && !saveError) return;
-    const t = setTimeout(() => {
-      setSaved(false);
-      setSaveError(null);
-    }, 4500);
+    if (!saveError) return;
+    const t = setTimeout(() => setSaveError(null), 4500);
     return () => clearTimeout(t);
-  }, [saved, saveError]);
+  }, [saveError]);
 
   return (
     <>
@@ -1481,6 +1553,10 @@ export default function LubricentrosPage() {
               <span className="text-gray-500">Total: <span className="font-semibold text-gray-900">{detail.total ? formatMoney(parseInt(detail.total, 10) || 0) : '—'}</span></span>
             </div>
 
+            <div className="mt-5 pt-5 border-t border-gray-100">
+              <OrderActions id={detail._id} />
+            </div>
+
             <div className="mt-6 flex flex-wrap justify-end gap-3">
               <button
                 onClick={() => prefillNewOrder(detail)}
@@ -1604,37 +1680,48 @@ export default function LubricentrosPage() {
         </div>
       )}
 
-      {/* Save toast — fixed so it's noticed regardless of scroll position */}
-      {(saved || saveError) && (
+      {/* Error toast — fixed so it's noticed regardless of scroll position */}
+      {saveError && (
         <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[70] w-full max-w-md px-4">
-          <div
-            className={`flex items-start gap-3 rounded-xl shadow-2xl border p-4 ${
-              saveError
-                ? 'bg-red-600 text-white border-red-700'
-                : 'bg-emerald-600 text-white border-emerald-700'
-            }`}
-          >
-            {saveError ? (
-              <AlertCircle size={20} className="flex-shrink-0 mt-0.5" />
-            ) : (
-              <CheckCircle size={20} className="flex-shrink-0 mt-0.5" />
-            )}
-            <p className="text-sm font-medium flex-1">
-              {saveError
-                ? saveError
-                : savedNo
-                  ? `Orden ${savedNo} ${savedEdit ? 'actualizada' : 'guardada'} correctamente.`
-                  : `Orden ${savedEdit ? 'actualizada' : 'guardada'} correctamente.`}
-            </p>
+          <div className="flex items-start gap-3 rounded-xl shadow-2xl border p-4 bg-red-600 text-white border-red-700">
+            <AlertCircle size={20} className="flex-shrink-0 mt-0.5" />
+            <p className="text-sm font-medium flex-1">{saveError}</p>
             <button
-              onClick={() => {
-                setSaved(false);
-                setSaveError(null);
-              }}
+              onClick={() => setSaveError(null)}
               className="text-white/80 hover:text-white flex-shrink-0"
               aria-label="Cerrar"
             >
               <X size={18} />
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Post-save actions modal — download PDF / send email / done */}
+      {actionsOrder && (
+        <div
+          className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] px-4 backdrop-blur-sm"
+          onClick={() => setActionsOrder(null)}
+        >
+          <div
+            className="bg-white rounded-2xl p-6 max-w-md w-full shadow-xl relative border border-gray-100"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex flex-col items-center text-center mb-5">
+              <CheckCircle className="h-12 w-12 text-emerald-500 mb-2" />
+              <h2 className="text-lg font-bold text-gray-900">
+                Orden {actionsOrder.ordenNo} {actionsOrder.edit ? 'actualizada' : 'guardada'}
+              </h2>
+              <p className="text-sm text-gray-600">¿Qué deseas hacer?</p>
+            </div>
+
+            <OrderActions id={actionsOrder.id} />
+
+            <button
+              onClick={() => setActionsOrder(null)}
+              className="mt-5 w-full py-2.5 rounded-xl bg-gray-100 text-gray-700 text-sm font-medium hover:bg-gray-200 transition-colors"
+            >
+              Listo
             </button>
           </div>
         </div>
