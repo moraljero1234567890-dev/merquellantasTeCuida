@@ -1,5 +1,21 @@
+/* eslint-disable jsx-a11y/alt-text */
 import React from 'react';
-import { Document, Page, Text, View, StyleSheet, renderToBuffer } from '@react-pdf/renderer';
+import { Document, Page, Text, View, Image, StyleSheet, renderToBuffer } from '@react-pdf/renderer';
+
+// Same logo shown in the dashboard navbar. Fetched and embedded as a data URL
+// at render time so the PDF is self-contained (falls back to text if offline).
+const LOGO_URL = 'https://www.merquellantas.com/assets/images/logo/Logo-Merquellantas.png';
+
+async function fetchLogo(): Promise<string | null> {
+  try {
+    const res = await fetch(LOGO_URL);
+    if (!res.ok) return null;
+    const buf = Buffer.from(await res.arrayBuffer());
+    return `data:image/png;base64,${buf.toString('base64')}`;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Renders a MERQUELLANTAS "Orden de trabajo" (lubricentro work order) as a PDF
@@ -59,7 +75,8 @@ const styles = StyleSheet.create({
     marginBottom: 14,
   },
   brand: { fontSize: 18, fontFamily: 'Helvetica-Bold', color: AMBER },
-  brandSub: { fontSize: 8, color: GRAY, marginTop: 2 },
+  brandSub: { fontSize: 8, color: GRAY, marginTop: 3 },
+  logo: { height: 34, objectFit: 'contain' },
   titleBox: { alignItems: 'flex-end' },
   title: { fontSize: 12, fontFamily: 'Helvetica-Bold', color: DARK },
   orderNo: { fontSize: 16, fontFamily: 'Helvetica-Bold', color: AMBER, marginTop: 2 },
@@ -111,15 +128,24 @@ function Row({ label, value }: { label: string; value?: string }) {
   );
 }
 
-function OrdenDoc({ o }: { o: OrdenPdfData }) {
+function OrdenDoc({ o, logo }: { o: OrdenPdfData; logo: string | null }) {
   const servicios = (o.servicios || []).filter((s) => s.servicio);
   return (
     <Document>
       <Page size="A4" style={styles.page}>
         <View style={styles.header}>
           <View>
-            <Text style={styles.brand}>MERQUELLANTAS</Text>
-            <Text style={styles.brandSub}>S.A.S · Orden de trabajo</Text>
+            {logo ? (
+              <>
+                <Image src={logo} style={styles.logo} />
+                <Text style={styles.brandSub}>S.A.S · Orden de trabajo</Text>
+              </>
+            ) : (
+              <>
+                <Text style={styles.brand}>MERQUELLANTAS</Text>
+                <Text style={styles.brandSub}>S.A.S · Orden de trabajo</Text>
+              </>
+            )}
           </View>
           <View style={styles.titleBox}>
             <Text style={styles.title}>ORDEN DE TRABAJO</Text>
@@ -226,5 +252,6 @@ function OrdenDoc({ o }: { o: OrdenPdfData }) {
 }
 
 export async function renderOrdenPdf(o: OrdenPdfData): Promise<Buffer> {
-  return renderToBuffer(<OrdenDoc o={o} />);
+  const logo = await fetchLogo();
+  return renderToBuffer(<OrdenDoc o={o} logo={logo} />);
 }
