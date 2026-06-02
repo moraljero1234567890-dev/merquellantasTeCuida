@@ -133,6 +133,7 @@ interface VehiculoSug {
   tipo: string;
   frec_cambio_km: string;
   proximo_cambio_meses: string;
+  ultimo_km: number;
 }
 
 const ALERTAS_PAGE_SIZE = 20;
@@ -546,6 +547,18 @@ export default function LubricentrosPage() {
       return;
     }
 
+    // KM must not go below the last recorded one (checked on create; the server
+    // validates edits, excluding the order itself).
+    if (!editingId && ultimoKm !== null) {
+      const km = parseInt(fields.km_actual, 10);
+      if (Number.isFinite(km) && km < ultimoKm) {
+        setSaveError(
+          `El KM actual no puede ser menor al último registrado (${new Intl.NumberFormat('es-CO').format(ultimoKm)} km).`,
+        );
+        return;
+      }
+    }
+
     setSaving(true);
     setSaveError(null);
     try {
@@ -738,6 +751,12 @@ export default function LubricentrosPage() {
   );
   const totalIva = Math.round(totalIvaBase * 0.19);
   const totalTotal = totalSubtotal + totalIva;
+
+  // Last recorded KM for the current plate (if known) — KM must not go below it.
+  const placaSug = vehiculoSugs.find(
+    (s) => s.placa.toUpperCase() === fields.placa.trim().toUpperCase(),
+  );
+  const ultimoKm = placaSug && placaSug.ultimo_km > 0 ? placaSug.ultimo_km : null;
 
   const formatDate = (date: string) =>
     new Intl.DateTimeFormat('es-CO', {
@@ -935,7 +954,14 @@ export default function LubricentrosPage() {
                   />
                   <Field label="Marca" value={fields.marca} onChange={(v) => setField('marca', v)} required />
                   <Field label="Tipo" value={fields.tipo} onChange={(v) => setField('tipo', v)} required />
-                  <Field label="KM actual vehículo" value={fields.km_actual} onChange={(v) => setField('km_actual', v)} required />
+                  <div>
+                    <Field label="KM actual vehículo" value={fields.km_actual} onChange={(v) => setField('km_actual', v)} required />
+                    {ultimoKm !== null && (
+                      <p className="mt-1 text-xs text-gray-600">
+                        Último registrado: {new Intl.NumberFormat('es-CO').format(ultimoKm)} km · debe ser mayor o igual.
+                      </p>
+                    )}
+                  </div>
                   <Field label="Frec. cambio (km)" value={fields.frec_cambio_km} onChange={(v) => setField('frec_cambio_km', v)} required />
                   <div>
                     <Field label="Próximo cambio (meses)" value={fields.proximo_cambio_meses} onChange={(v) => setField('proximo_cambio_meses', v)} required />

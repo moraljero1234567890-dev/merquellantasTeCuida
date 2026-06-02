@@ -168,6 +168,26 @@ function computeProximoCambioFecha(fecha: string, meses: string, fallbackBase: D
   return addMonths(base, m);
 }
 
+// Highest KM actual ever recorded for a plate (null if none). KM only ever
+// increases, so a new reading must be >= this. excludeId skips the order being
+// edited so it can be corrected downward relative to itself.
+async function lastKmForPlaca(
+  db: Awaited<ReturnType<typeof getDb>>,
+  placa: string,
+  excludeId?: ObjectId,
+): Promise<number | null> {
+  if (!placa) return null;
+  const q: Record<string, unknown> = { placa };
+  if (excludeId) q._id = { $ne: excludeId };
+  const docs = await db.collection(COLLECTION).find(q, { projection: { km_actual: 1 } }).toArray();
+  let max: number | null = null;
+  for (const d of docs) {
+    const n = parseInt(clean(d.km_actual), 10);
+    if (Number.isFinite(n)) max = max === null ? n : Math.max(max, n);
+  }
+  return max;
+}
+
 // Parse a plain YYYY-MM-DD string into a local Date, or null if invalid.
 function parseDateOnly(s: string): Date | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
@@ -257,7 +277,13 @@ export async function GET(req: NextRequest) {
         .aggregate([
           { $match: { placa: { $regex: '^' + esc, $options: 'i' } } },
           { $sort: { created_at: -1 } },
-          { $group: { _id: { $toUpper: '$placa' }, doc: { $first: '$$ROOT' } } },
+          {
+            $group: {
+              _id: { $toUpper: '$placa' },
+              doc: { $first: '$$ROOT' },
+              maxKm: { $max: { $convert: { input: '$km_actual', to: 'int', onError: 0, onNull: 0 } } },
+            },
+          },
           { $limit: 25 },
         ])
         .toArray();
@@ -268,6 +294,7 @@ export async function GET(req: NextRequest) {
           tipo: clean(r.doc.tipo),
           frec_cambio_km: clean(r.doc.frec_cambio_km),
           proximo_cambio_meses: clean(r.doc.proximo_cambio_meses),
+          ultimo_km: typeof r.maxKm === 'number' ? r.maxKm : 0,
         })),
       );
     }
@@ -376,6 +403,17 @@ export async function POST(req: NextRequest) {
   doc.total = String(totals.total);
 
   const db = await getDb();
+
+  // KM only increases: reject a reading below the last recorded one for the plate.
+  const kmActual = parseInt(doc.km_actual as string, 10);
+  const lastKm = await lastKmForPlaca(db, doc.placa as string);
+  if (lastKm !== null && Number.isFinite(kmActual) && kmActual < lastKm) {
+    return NextResponse.json(
+      { error: `El KM actual (${kmActual}) no puede ser menor al último registrado (${lastKm}) para la placa ${doc.placa}.` },
+      { status: 400 },
+    );
+  }
+
   const createdAt = new Date();
 
   // The order number is always system-assigned and consecutive — any value the
@@ -432,6 +470,17 @@ export async function PUT(req: NextRequest) {
   if (missing.length) {
     return NextResponse.json(
       { error: `Faltan campos requeridos: ${missing.join(', ')}.` },
+      { status: 400 },
+    );
+  }
+
+  // KM only increases: compare against other orders for this plate (this order
+  // excluded so its own value can be corrected).
+  const kmActual = parseInt(update.km_actual as string, 10);
+  const lastKm = await lastKmForPlaca(db, update.placa as string, new ObjectId(id));
+  if (lastKm !== null && Number.isFinite(kmActual) && kmActual < lastKm) {
+    return NextResponse.json(
+      { error: `El KM actual (${kmActual}) no puede ser menor al último registrado (${lastKm}) para la placa ${update.placa}.` },
       { status: 400 },
     );
   }
