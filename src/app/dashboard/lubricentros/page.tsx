@@ -385,7 +385,19 @@ export default function LubricentrosPage() {
     setFields((f) => ({ ...f, [key]: value }));
 
   const setServicio = (i: number, key: keyof ServicioLinea, value: string) =>
-    setServicios((rows) => rows.map((r, idx) => (idx === i ? { ...r, [key]: value } : r)));
+    setServicios((rows) =>
+      rows.map((r, idx) => {
+        if (idx !== i) return r;
+        const updated = { ...r, [key]: value };
+        // Subtotal is always unidad × valor unitario — never typed directly.
+        if (key === 'unidad' || key === 'valor_unitario') {
+          const u = parseInt(updated.unidad, 10) || 0;
+          const v = parseInt(updated.valor_unitario, 10) || 0;
+          updated.subtotal = u && v ? String(u * v) : '';
+        }
+        return updated;
+      }),
+    );
 
   const resetForm = () => {
     setFields(freshFields());
@@ -748,7 +760,8 @@ export default function LubricentrosPage() {
                 </h2>
                 <p className="text-xs text-gray-400 mb-4">
                   Opcional. Alineación usa referencia sencilla/doble; en los demás escribe el producto/referencia
-                  aplicado. El subtotal es un valor entero y los totales se calculan solos.
+                  aplicado. Unidad y valor unitario son enteros; el subtotal (unidad × valor) y los totales se
+                  calculan solos.
                 </p>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
@@ -799,6 +812,9 @@ export default function LubricentrosPage() {
                           </td>
                           <td className="py-2 px-2">
                             <input
+                              type="number"
+                              min="0"
+                              step="1"
                               value={row.unidad}
                               onChange={(e) => setServicio(i, 'unidad', e.target.value)}
                               className="w-20 rounded border border-gray-300 py-1 px-2 text-sm focus:ring-amber-500 focus:border-amber-500"
@@ -806,20 +822,18 @@ export default function LubricentrosPage() {
                           </td>
                           <td className="py-2 px-2">
                             <input
+                              type="number"
+                              min="0"
+                              step="1"
                               value={row.valor_unitario}
                               onChange={(e) => setServicio(i, 'valor_unitario', e.target.value)}
                               className="w-28 rounded border border-gray-300 py-1 px-2 text-sm focus:ring-amber-500 focus:border-amber-500"
                             />
                           </td>
                           <td className="py-2 pl-2">
-                            <input
-                              type="number"
-                              min="0"
-                              step="1"
-                              value={row.subtotal}
-                              onChange={(e) => setServicio(i, 'subtotal', e.target.value)}
-                              className="w-28 rounded border border-gray-300 py-1 px-2 text-sm focus:ring-amber-500 focus:border-amber-500"
-                            />
+                            <div className="w-28 py-1 px-2 text-sm text-gray-900">
+                              {row.subtotal ? formatMoney(parseInt(row.subtotal, 10) || 0) : '—'}
+                            </div>
                           </td>
                         </tr>
                       ))}

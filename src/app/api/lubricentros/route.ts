@@ -89,13 +89,20 @@ function missingRequired(doc: Record<string, unknown>): string[] {
 function normalizeServicios(body: { servicios?: unknown }): ServicioLinea[] {
   const raw = Array.isArray(body.servicios) ? body.servicios : [];
   return raw
-    .map((s: Record<string, unknown>) => ({
-      servicio: clean(s?.servicio),
-      referencia: clean(s?.referencia),
-      unidad: clean(s?.unidad),
-      valor_unitario: clean(s?.valor_unitario),
-      subtotal: clean(s?.subtotal),
-    }))
+    .map((s: Record<string, unknown>) => {
+      const unidad = clean(s?.unidad);
+      const valor_unitario = clean(s?.valor_unitario);
+      // Subtotal is derived (unidad × valor unitario), never trusted from input.
+      const u = parseInt(unidad, 10) || 0;
+      const v = parseInt(valor_unitario, 10) || 0;
+      return {
+        servicio: clean(s?.servicio),
+        referencia: clean(s?.referencia),
+        unidad,
+        valor_unitario,
+        subtotal: u && v ? String(u * v) : '',
+      };
+    })
     .filter(
       (s: ServicioLinea) =>
         s.servicio && (s.referencia || s.unidad || s.valor_unitario || s.subtotal),
