@@ -80,16 +80,20 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// Next-change date = service date ("fecha") + interval in months
-// ("proximo_cambio_meses"). Returns null when either piece is missing/invalid,
-// so those orders are simply skipped in the alerts view.
-function computeProximoCambioFecha(fecha: string, meses: string): Date | null {
+// Next-change date = base date + interval in months ("proximo_cambio_meses").
+// The base is the service date ("fecha") when present, otherwise the order's
+// creation date — so entering "12 months" on a Jan-2026 order yields Jan 2027
+// even if Fecha was left blank. Returns null only when the months value is
+// missing/invalid, so that order is skipped in the alerts view.
+function computeProximoCambioFecha(fecha: string, meses: string, fallbackBase: Date): Date | null {
   const m = parseInt(meses, 10);
   if (!Number.isFinite(m)) return null;
+  let base = fallbackBase;
   const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(fecha);
-  if (!match) return null;
-  const base = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-  if (Number.isNaN(base.getTime())) return null;
+  if (match) {
+    const parsed = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    if (!Number.isNaN(parsed.getTime())) base = parsed;
+  }
   return addMonths(base, m);
 }
 
@@ -167,15 +171,17 @@ export async function POST(req: NextRequest) {
         (s.referencia || s.unidad || s.valor_unitario || s.subtotal),
     );
 
+  const createdAt = new Date();
   doc.servicios = servicios;
   doc.proximo_cambio_fecha = computeProximoCambioFecha(
     doc.fecha as string,
     doc.proximo_cambio_meses as string,
+    createdAt,
   );
   doc._search = buildSearchBlob(doc, servicios);
   doc.created_by = session.user.id;
   doc.created_by_nombre = session.user.nombre || null;
-  doc.created_at = new Date();
+  doc.created_at = createdAt;
 
   const db = await getDb();
   const result = await db.collection(COLLECTION).insertOne(doc);

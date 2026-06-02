@@ -87,16 +87,19 @@ interface Orden extends Fields {
 
 const ALERTAS_PAGE_SIZE = 20;
 
-// Compute the next-change date from a service date (YYYY-MM-DD) + interval in
-// months. Mirrors the server so the form can preview it. Returns null when
-// either piece is missing/invalid.
+// Compute the next-change date from the months interval. Base is the service
+// date (YYYY-MM-DD) when present, otherwise today — mirroring the server so the
+// form preview matches what gets stored. Returns null only when months is
+// missing/invalid.
 function computeNextChange(fecha: string, meses: string): Date | null {
   const m = parseInt(meses, 10);
   if (!Number.isFinite(m)) return null;
+  let base = new Date();
   const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(fecha);
-  if (!match) return null;
-  const base = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
-  if (Number.isNaN(base.getTime())) return null;
+  if (match) {
+    const parsed = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+    if (!Number.isNaN(parsed.getTime())) base = parsed;
+  }
   return addMonths(base, m);
 }
 
