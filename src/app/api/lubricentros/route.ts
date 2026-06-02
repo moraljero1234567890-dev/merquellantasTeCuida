@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { addMonths } from 'date-fns';
 import { getDb } from '../../../lib/db';
 import { auth } from '../../../lib/auth';
 
@@ -79,19 +80,54 @@ function escapeRegex(str: string): string {
   return str.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// Next-change date = service date ("fecha") + interval in months
+// ("proximo_cambio_meses"). Returns null when either piece is missing/invalid,
+// so those orders are simply skipped in the alerts view.
+function computeProximoCambioFecha(fecha: string, meses: string): Date | null {
+  const m = parseInt(meses, 10);
+  if (!Number.isFinite(m)) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(fecha);
+  if (!match) return null;
+  const base = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  if (Number.isNaN(base.getTime())) return null;
+  return addMonths(base, m);
+}
+
 // GET /api/lubricentros
-//   - ?q=<text>  full-text search across every field (matches "anything")
-//   - ?limit=    cap results (default 100, max 500)
+//   - ?q=<text>      full-text search across every field (matches "anything")
+//   - ?limit=        cap search results (default 100, max 500)
+//   - ?alertas=true  paginated list sorted by next-change date (soonest/most
+//                    overdue first); use ?page= and ?pageSize= to page through.
+//                    Returns { results, total, page, pageSize }.
 export async function GET(req: NextRequest) {
   const session = await auth();
   if (!session) return NextResponse.json({ error: 'No autorizado' }, { status: 401 });
   if (session.user.rol === 'externo') return NextResponse.json({ error: 'No autorizado' }, { status: 403 });
 
   const { searchParams } = new URL(req.url);
+  const db = await getDb();
+
+  // Alerts view: only orders that have a computed next-change date, sorted by
+  // it ascending and paginated so we never load everything at once.
+  if (searchParams.get('alertas') === 'true') {
+    const page = Math.max(1, parseInt(searchParams.get('page') || '1') || 1);
+    const pageSize = Math.max(1, Math.min(parseInt(searchParams.get('pageSize') || '20') || 20, 100));
+    const filter = { proximo_cambio_fecha: { $ne: null } };
+
+    const total = await db.collection(COLLECTION).countDocuments(filter);
+    const results = await db
+      .collection(COLLECTION)
+      .find(filter)
+      .sort({ proximo_cambio_fecha: 1 })
+      .skip((page - 1) * pageSize)
+      .limit(pageSize)
+      .toArray();
+
+    return NextResponse.json({ results, total, page, pageSize });
+  }
+
   const q = (searchParams.get('q') || '').trim();
   const limit = Math.max(1, Math.min(parseInt(searchParams.get('limit') || '100') || 100, 500));
-
-  const db = await getDb();
   const filter = q ? { _search: { $regex: escapeRegex(q.toLowerCase()) } } : {};
 
   const results = await db
@@ -132,6 +168,10 @@ export async function POST(req: NextRequest) {
     );
 
   doc.servicios = servicios;
+  doc.proximo_cambio_fecha = computeProximoCambioFecha(
+    doc.fecha as string,
+    doc.proximo_cambio_meses as string,
+  );
   doc._search = buildSearchBlob(doc, servicios);
   doc.created_by = session.user.id;
   doc.created_by_nombre = session.user.nombre || null;

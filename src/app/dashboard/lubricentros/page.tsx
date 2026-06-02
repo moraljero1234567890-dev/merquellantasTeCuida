@@ -1,6 +1,7 @@
 "use client";
 
 import React, { useState, useEffect, useCallback } from 'react';
+import { addMonths } from 'date-fns';
 import DashboardNavbar from '../navbar';
 import { useSession } from 'next-auth/react';
 import {
@@ -13,6 +14,9 @@ import {
   User2,
   Wrench,
   Calendar,
+  Bell,
+  ChevronLeft,
+  ChevronRight,
   X,
 } from 'lucide-react';
 
@@ -78,7 +82,47 @@ interface Orden extends Fields {
   servicios: ServicioLinea[];
   created_at: string;
   created_by_nombre?: string | null;
+  proximo_cambio_fecha?: string | null;
 }
+
+const ALERTAS_PAGE_SIZE = 20;
+
+// Compute the next-change date from a service date (YYYY-MM-DD) + interval in
+// months. Mirrors the server so the form can preview it. Returns null when
+// either piece is missing/invalid.
+function computeNextChange(fecha: string, meses: string): Date | null {
+  const m = parseInt(meses, 10);
+  if (!Number.isFinite(m)) return null;
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(fecha);
+  if (!match) return null;
+  const base = new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  if (Number.isNaN(base.getTime())) return null;
+  return addMonths(base, m);
+}
+
+type StatusColor = 'red' | 'yellow' | 'green';
+
+// Classify a next-change date relative to today:
+//   red    = already passed (overdue)
+//   yellow = due within the next month
+//   green  = further out
+function changeStatus(iso?: string | null): StatusColor | null {
+  if (!iso) return null;
+  const target = new Date(iso);
+  if (Number.isNaN(target.getTime())) return null;
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const t = new Date(target.getFullYear(), target.getMonth(), target.getDate());
+  if (t < today) return 'red';
+  if (t <= addMonths(today, 1)) return 'yellow';
+  return 'green';
+}
+
+const STATUS_STYLES: Record<StatusColor, { border: string; badge: string; label: string }> = {
+  red: { border: 'border-l-red-500', badge: 'bg-red-100 text-red-700 border-red-200', label: 'Vencido' },
+  yellow: { border: 'border-l-amber-500', badge: 'bg-amber-100 text-amber-700 border-amber-200', label: 'Próximo mes' },
+  green: { border: 'border-l-emerald-500', badge: 'bg-emerald-100 text-emerald-700 border-emerald-200', label: 'Al día' },
+};
 
 const emptyServicios = (): ServicioLinea[] =>
   SERVICIOS.map((servicio) => ({
@@ -116,7 +160,7 @@ function Field({
 
 export default function LubricentrosPage() {
   const { data: session } = useSession();
-  const [tab, setTab] = useState<'nueva' | 'buscar'>('nueva');
+  const [tab, setTab] = useState<'nueva' | 'buscar' | 'alertas'>('nueva');
 
   // ---- Form state ----
   const [fields, setFields] = useState<Fields>(emptyFields);
@@ -193,6 +237,42 @@ export default function LubricentrosPage() {
     return () => clearTimeout(t);
   }, [query, tab, runSearch]);
 
+  // ---- Alerts state ----
+  const [alertas, setAlertas] = useState<Orden[]>([]);
+  const [alertasPage, setAlertasPage] = useState(1);
+  const [alertasTotal, setAlertasTotal] = useState(0);
+  const [loadingAlertas, setLoadingAlertas] = useState(false);
+  const totalPages = Math.max(1, Math.ceil(alertasTotal / ALERTAS_PAGE_SIZE));
+
+  const fetchAlertas = useCallback(
+    async (page: number) => {
+      if (!session) return;
+      setLoadingAlertas(true);
+      try {
+        const res = await fetch(`/api/lubricentros?alertas=true&page=${page}&pageSize=${ALERTAS_PAGE_SIZE}`);
+        if (res.ok) {
+          const data = await res.json();
+          setAlertas(data.results || []);
+          setAlertasTotal(data.total || 0);
+        }
+      } catch {
+        // ignore
+      } finally {
+        setLoadingAlertas(false);
+      }
+    },
+    [session],
+  );
+
+  useEffect(() => {
+    if (tab === 'alertas') fetchAlertas(alertasPage);
+  }, [tab, alertasPage, fetchAlertas]);
+
+  const formatDateOnly = (date: string | Date) =>
+    new Intl.DateTimeFormat('es-CO', { year: 'numeric', month: 'long', day: 'numeric' }).format(
+      new Date(date),
+    );
+
   const formatDate = (date: string) =>
     new Intl.DateTimeFormat('es-CO', {
       year: 'numeric',
@@ -241,6 +321,17 @@ export default function LubricentrosPage() {
             >
               <Search size={16} />
               Buscar
+            </button>
+            <button
+              onClick={() => setTab('alertas')}
+              className={`inline-flex items-center gap-2 px-4 py-2 rounded-xl text-sm font-medium transition-colors ${
+                tab === 'alertas'
+                  ? 'bg-amber-500 text-white shadow-md'
+                  : 'bg-white text-gray-600 border border-gray-200 hover:bg-gray-50'
+              }`}
+            >
+              <Bell size={16} />
+              Alertas
             </button>
           </div>
 
@@ -326,7 +417,18 @@ export default function LubricentrosPage() {
                   <Field label="Tipo" value={fields.tipo} onChange={(v) => setField('tipo', v)} />
                   <Field label="KM actual vehículo" value={fields.km_actual} onChange={(v) => setField('km_actual', v)} />
                   <Field label="Frec. cambio (km)" value={fields.frec_cambio_km} onChange={(v) => setField('frec_cambio_km', v)} />
-                  <Field label="Próximo cambio (meses)" value={fields.proximo_cambio_meses} onChange={(v) => setField('proximo_cambio_meses', v)} />
+                  <div>
+                    <Field label="Próximo cambio (meses)" value={fields.proximo_cambio_meses} onChange={(v) => setField('proximo_cambio_meses', v)} />
+                    {(() => {
+                      const next = computeNextChange(fields.fecha, fields.proximo_cambio_meses);
+                      return next ? (
+                        <p className="mt-1 text-xs text-amber-600 flex items-center gap-1">
+                          <Calendar className="h-3 w-3" />
+                          Próximo cambio: {formatDateOnly(next)}
+                        </p>
+                      ) : null;
+                    })()}
+                  </div>
                 </div>
               </section>
 
@@ -492,6 +594,100 @@ export default function LubricentrosPage() {
               )}
             </div>
           )}
+
+          {/* ---------- ALERTAS ---------- */}
+          {tab === 'alertas' && (
+            <div className="space-y-5">
+              {/* Legend */}
+              <div className="flex flex-wrap items-center gap-4 text-xs text-gray-500">
+                <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-red-500" /> Vencido</span>
+                <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-amber-500" /> Próximo mes</span>
+                <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-emerald-500" /> Al día</span>
+              </div>
+
+              <div className="text-sm text-gray-500">
+                {loadingAlertas
+                  ? 'Cargando...'
+                  : `${alertasTotal} ${alertasTotal === 1 ? 'orden' : 'órdenes'} con próximo cambio`}
+              </div>
+
+              {alertas.length === 0 && !loadingAlertas ? (
+                <div className="py-16 text-center text-gray-400 bg-white rounded-2xl border border-gray-100">
+                  <Bell className="h-10 w-10 mx-auto mb-2 opacity-50" />
+                  <p className="text-sm">No hay órdenes con fecha de próximo cambio.</p>
+                  <p className="text-xs mt-1">
+                    Registra la <strong>Fecha</strong> y los <strong>meses de próximo cambio</strong> en una orden para verla aquí.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-3">
+                  {alertas.map((o) => {
+                    const status = changeStatus(o.proximo_cambio_fecha);
+                    const s = status ? STATUS_STYLES[status] : null;
+                    return (
+                      <button
+                        key={o._id}
+                        onClick={() => setDetail(o)}
+                        className={`w-full text-left bg-white p-4 rounded-2xl border border-gray-100 border-l-4 ${
+                          s?.border || 'border-l-gray-300'
+                        } shadow-sm hover:shadow transition-all flex items-center justify-between gap-4`}
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 mb-1">
+                            <span className="font-semibold text-gray-900 truncate">
+                              {o.orden_no ? `Orden ${o.orden_no}` : o.nombre || 'Orden sin número'}
+                            </span>
+                            {o.placa && (
+                              <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
+                                {o.placa}
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-xs text-gray-500 truncate">
+                            {[o.nombre, o.marca, o.tipo].filter(Boolean).join(' · ') || '—'}
+                          </p>
+                        </div>
+                        <div className="text-right flex-shrink-0">
+                          {s && (
+                            <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-semibold border ${s.badge} mb-1`}>
+                              {s.label}
+                            </span>
+                          )}
+                          <p className="text-xs text-gray-500 flex items-center gap-1 justify-end">
+                            <Calendar className="h-3 w-3" />
+                            {o.proximo_cambio_fecha ? formatDateOnly(o.proximo_cambio_fecha) : '—'}
+                          </p>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Pagination */}
+              {alertasTotal > ALERTAS_PAGE_SIZE && (
+                <div className="flex items-center justify-center gap-3 pt-2">
+                  <button
+                    onClick={() => setAlertasPage((p) => Math.max(1, p - 1))}
+                    disabled={alertasPage <= 1 || loadingAlertas}
+                    className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-white border border-gray-200 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <ChevronLeft size={16} /> Anterior
+                  </button>
+                  <span className="text-sm text-gray-500">
+                    Página {alertasPage} de {totalPages}
+                  </span>
+                  <button
+                    onClick={() => setAlertasPage((p) => Math.min(totalPages, p + 1))}
+                    disabled={alertasPage >= totalPages || loadingAlertas}
+                    className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-white border border-gray-200 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Siguiente <ChevronRight size={16} />
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
 
@@ -540,6 +736,7 @@ export default function LubricentrosPage() {
                 ['KM actual', detail.km_actual],
                 ['Frec. cambio (km)', detail.frec_cambio_km],
                 ['Próximo cambio (meses)', detail.proximo_cambio_meses],
+                ['Próximo cambio (fecha)', detail.proximo_cambio_fecha ? formatDateOnly(detail.proximo_cambio_fecha) : ''],
               ]}
             />
 
