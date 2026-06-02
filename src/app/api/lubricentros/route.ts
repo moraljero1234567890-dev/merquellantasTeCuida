@@ -207,7 +207,7 @@ export async function GET(req: NextRequest) {
           { $match: { cedula_nit: { $regex: '^' + esc, $options: 'i' } } },
           { $sort: { created_at: -1 } },
           { $group: { _id: { $toLower: '$cedula_nit' }, doc: { $first: '$$ROOT' } } },
-          { $limit: 8 },
+          { $limit: 25 },
         ])
         .toArray();
       return NextResponse.json(
@@ -230,7 +230,7 @@ export async function GET(req: NextRequest) {
           { $match: { placa: { $regex: '^' + esc, $options: 'i' } } },
           { $sort: { created_at: -1 } },
           { $group: { _id: { $toUpper: '$placa' }, doc: { $first: '$$ROOT' } } },
-          { $limit: 8 },
+          { $limit: 25 },
         ])
         .toArray();
       return NextResponse.json(
@@ -256,7 +256,7 @@ export async function GET(req: NextRequest) {
             },
           },
           { $group: { _id: { $toLower: '$servicios.referencia' }, val: { $first: '$servicios.referencia' } } },
-          { $limit: 8 },
+          { $limit: 15 },
         ])
         .toArray();
       return NextResponse.json(rows.map((r) => clean(r.val)).filter(Boolean));

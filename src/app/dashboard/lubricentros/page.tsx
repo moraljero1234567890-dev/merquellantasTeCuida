@@ -216,42 +216,75 @@ function Field({
   );
 }
 
-// Labelled input backed by a native <datalist> so suggestions appear without
-// any custom overlay — sidesteps z-index/clipping issues entirely.
-function AutocompleteField({
+interface AutoOption {
+  value: string;
+  secondary?: string;
+}
+
+// Labelled input with a custom, scrollable suggestions dropdown. Unlike a
+// native <datalist> it styles each option (primary + secondary line) and
+// scrolls cleanly when there are many matches. Used outside scroll containers
+// so the absolute dropdown isn't clipped; z-50 keeps it above the cards below.
+function Autocomplete({
   label,
   value,
   onChange,
+  onSelect,
   required = false,
-  listId,
+  placeholder,
   options,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
+  onSelect: (opt: AutoOption) => void;
   required?: boolean;
-  listId: string;
-  options: { value: string; label?: string }[];
+  placeholder?: string;
+  options: AutoOption[];
 }) {
+  const [open, setOpen] = useState(false);
   return (
-    <label className="block">
-      <span className="block text-xs font-medium text-gray-500 mb-1">
-        {label}
-        {required && <span className="text-red-500"> *</span>}
-      </span>
-      <input
-        list={listId}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        autoComplete="off"
-        className="block w-full rounded-lg border border-gray-300 shadow-sm focus:ring-amber-500 focus:border-amber-500 py-2 px-3 text-sm"
-      />
-      <datalist id={listId}>
-        {options.map((o) => (
-          <option key={o.value} value={o.value} label={o.label} />
-        ))}
-      </datalist>
-    </label>
+    <div className="relative">
+      <label className="block">
+        <span className="block text-xs font-medium text-gray-500 mb-1">
+          {label}
+          {required && <span className="text-red-500"> *</span>}
+        </span>
+        <input
+          value={value}
+          placeholder={placeholder}
+          autoComplete="off"
+          onChange={(e) => {
+            onChange(e.target.value);
+            setOpen(true);
+          }}
+          onFocus={() => setOpen(true)}
+          onBlur={() => setTimeout(() => setOpen(false), 150)}
+          className="block w-full rounded-lg border border-gray-300 shadow-sm focus:ring-amber-500 focus:border-amber-500 py-2 px-3 text-sm"
+        />
+      </label>
+      {open && options.length > 0 && (
+        <ul className="absolute z-50 left-0 right-0 mt-1 max-h-72 overflow-y-auto rounded-xl border border-gray-200 bg-white shadow-lg divide-y divide-gray-100">
+          {options.map((o) => (
+            <li key={o.value}>
+              <button
+                type="button"
+                // Prevent the input blur from firing before the click registers.
+                onMouseDown={(e) => e.preventDefault()}
+                onClick={() => {
+                  onSelect(o);
+                  setOpen(false);
+                }}
+                className="w-full text-left px-3 py-2 hover:bg-amber-50 transition-colors"
+              >
+                <div className="text-sm font-medium text-gray-900 truncate">{o.value}</div>
+                {o.secondary && <div className="text-xs text-gray-500 truncate">{o.secondary}</div>}
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -398,6 +431,29 @@ export default function LubricentrosPage() {
         return updated;
       }),
     );
+
+  // Fill the whole client / vehicle block from a chosen suggestion. Vehicle fill
+  // never touches km_actual — the latest reading must always be entered.
+  const fillCliente = (s: ClienteSug) =>
+    setFields((f) => ({
+      ...f,
+      cedula_nit: s.cedula_nit,
+      nombre: s.nombre,
+      fecha_cumpleanos: s.fecha_cumpleanos,
+      direccion: s.direccion,
+      celular: s.celular,
+      correo: s.correo,
+      cliente: s.cliente,
+    }));
+  const fillVehiculo = (s: VehiculoSug) =>
+    setFields((f) => ({
+      ...f,
+      placa: s.placa.toUpperCase(),
+      marca: s.marca,
+      tipo: s.tipo,
+      frec_cambio_km: s.frec_cambio_km,
+      proximo_cambio_meses: s.proximo_cambio_meses,
+    }));
 
   const resetForm = () => {
     setFields(freshFields());
@@ -700,20 +756,24 @@ export default function LubricentrosPage() {
                   <User2 size={18} className="text-amber-500" /> Cliente
                 </h2>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  <Field label="Nombre" value={fields.nombre} onChange={(v) => setField('nombre', v)} required />
-                  <AutocompleteField
+                  <Field label="Nombre conductor" value={fields.nombre} onChange={(v) => setField('nombre', v)} required />
+                  <Autocomplete
                     label="Cédula y/o NIT"
                     value={fields.cedula_nit}
                     onChange={(v) => setField('cedula_nit', v)}
+                    onSelect={(opt) => {
+                      const full = clienteSugs.find((s) => s.cedula_nit === opt.value);
+                      if (full) fillCliente(full);
+                      else setField('cedula_nit', opt.value);
+                    }}
                     required
-                    listId="cedula-list"
-                    options={clienteSugs.map((s) => ({ value: s.cedula_nit, label: s.nombre }))}
+                    options={clienteSugs.map((s) => ({ value: s.cedula_nit, secondary: s.nombre }))}
                   />
                   <Field label="Fecha de cumpleaños" value={fields.fecha_cumpleanos} onChange={(v) => setField('fecha_cumpleanos', v)} />
                   <Field label="Dirección" value={fields.direccion} onChange={(v) => setField('direccion', v)} />
                   <Field label="Celular" value={fields.celular} onChange={(v) => setField('celular', v)} required />
                   <Field label="Correo electrónico" value={fields.correo} onChange={(v) => setField('correo', v)} />
-                  <Field label="Cliente" value={fields.cliente} onChange={(v) => setField('cliente', v)} />
+                  <Field label="Nombre empresa" value={fields.cliente} onChange={(v) => setField('cliente', v)} />
                 </div>
               </section>
 
@@ -723,15 +783,19 @@ export default function LubricentrosPage() {
                   <Car size={18} className="text-amber-500" /> Vehículo
                 </h2>
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                  <AutocompleteField
+                  <Autocomplete
                     label="Placa"
                     value={fields.placa}
                     onChange={(v) => setField('placa', v.toUpperCase())}
+                    onSelect={(opt) => {
+                      const full = vehiculoSugs.find((s) => s.placa.toUpperCase() === opt.value.toUpperCase());
+                      if (full) fillVehiculo(full);
+                      else setField('placa', opt.value.toUpperCase());
+                    }}
                     required
-                    listId="placa-list"
                     options={vehiculoSugs.map((s) => ({
                       value: s.placa,
-                      label: [s.marca, s.tipo].filter(Boolean).join(' '),
+                      secondary: [s.marca, s.tipo].filter(Boolean).join(' · '),
                     }))}
                   />
                   <Field label="Marca" value={fields.marca} onChange={(v) => setField('marca', v)} required />
@@ -1088,13 +1152,13 @@ export default function LubricentrosPage() {
                 ['Factura No.', detail.factura_no],
                 ['Forma de pago', detail.forma_pago],
                 ['Asesor', detail.asesor_servicio],
-                ['Nombre', detail.nombre],
+                ['Nombre conductor', detail.nombre],
                 ['Cédula / NIT', detail.cedula_nit],
                 ['Cumpleaños', detail.fecha_cumpleanos],
                 ['Dirección', detail.direccion],
                 ['Celular', detail.celular],
                 ['Correo', detail.correo],
-                ['Cliente', detail.cliente],
+                ['Nombre empresa', detail.cliente],
                 ['Placa', detail.placa],
                 ['Marca', detail.marca],
                 ['Tipo', detail.tipo],
