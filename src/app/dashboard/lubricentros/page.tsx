@@ -393,7 +393,7 @@ export default function LubricentrosPage() {
             </div>
             <div>
               <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Lubricentros</h1>
-              <p className="text-sm text-gray-500">Órdenes de trabajo MERQUELLANTAS</p>
+              <p className="text-sm text-gray-500">Órdenes de trabajo MERQUELLANTAS S.A.S</p>
             </div>
           </div>
 
