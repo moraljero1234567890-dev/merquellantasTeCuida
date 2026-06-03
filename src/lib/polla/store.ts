@@ -1,5 +1,6 @@
 import "server-only";
 import bcrypt from "bcryptjs";
+import { ObjectId } from "mongodb";
 import { getDb } from "@/lib/db";
 import { pollaMatchesCollection, pollaPredictionsCollection, pollaUsersCollection } from "./collections";
 import type { MatchDoc, PredictionDoc } from "./types";
@@ -10,6 +11,7 @@ type PollaLoginResult = {
   email: string;
   name: string;
   attemptsAllowed: number;
+  source?: "fondo" | "polla";
 };
 
 export async function authenticatePollaUser(
@@ -285,28 +287,64 @@ export async function createPollaUser(input: {
 export async function listAllPollaParticipants(): Promise<PollaLoginResult[]> {
   const db = await getDb();
   const results: PollaLoginResult[] = [];
-  // Get fondo members from main system
+  const seenCedulas = new Set<string>();
+  // Get fondo members from main system. fondo_members.user_id is stored as the
+  // string form of users._id (an ObjectId), so we must convert before querying.
   const fondoMembers = await db.collection("fondo_members").find({ activo: true }).toArray();
   for (const fm of fondoMembers) {
-    const user = await db.collection("users").findOne({ _id: fm.user_id });
+    const rawId = fm.user_id;
+    let user = null;
+    if (rawId instanceof ObjectId) {
+      user = await db.collection("users").findOne({ _id: rawId });
+    } else if (typeof rawId === "string" && ObjectId.isValid(rawId)) {
+      user = await db.collection("users").findOne({ _id: new ObjectId(rawId) });
+    } else if (rawId != null) {
+      // Fallback: some data may store user_id as a plain (string) _id.
+      user = await db.collection("users").findOne({ _id: rawId });
+    }
     if (!user) continue;
+    const cedula = user.cedula ?? "";
+    if (cedula) seenCedulas.add(cedula);
     results.push({
-      cedula: user.cedula,
+      cedula,
       email: user.email ?? "",
-      name: user.nombre ?? "",
+      name: user.nombre ?? user.name ?? "",
       attemptsAllowed: 10,
+      source: "fondo",
     });
   }
-  // Get polla-only users
+  // Get polla-only users (skip any whose cedula already came from the fondo).
   const pollaCol = await pollaUsersCollection();
   const pollaUsers = await pollaCol.find({}).toArray();
   for (const pu of pollaUsers) {
+    // The prediction key (and login identity) is pu._id = cedula || email.
+    const identity = pu._id || pu.cedula || pu.email;
+    if (pu.cedula && seenCedulas.has(pu.cedula)) continue;
     results.push({
-      cedula: pu.cedula,
+      cedula: identity,
       email: pu.email,
       name: pu.name,
       attemptsAllowed: pu.attemptsAllowed,
+      source: "polla",
     });
   }
   return results;
+}
+
+/**
+ * Counts how many prediction boletas each user has saved, keyed by the user's
+ * prediction identity (userEmail field, which holds the cedula or polla _id).
+ */
+export async function getPredictionCountsByUser(): Promise<Record<string, number>> {
+  const col = await pollaPredictionsCollection();
+  const rows = await col
+    .aggregate<{ _id: string; count: number }>([
+      { $group: { _id: "$userEmail", count: { $sum: 1 } } },
+    ])
+    .toArray();
+  const counts: Record<string, number> = {};
+  for (const r of rows) {
+    if (r._id != null) counts[r._id] = r.count;
+  }
+  return counts;
 }

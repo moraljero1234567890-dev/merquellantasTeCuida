@@ -7,6 +7,12 @@ import { usePollaAuth } from "@/lib/polla/use-polla-auth";
 const MERQUE_LOGO =
   "https://www.merquellantas.com/assets/images/logo/Logo-Merquellantas.png";
 
+type ScoreBreakdown = {
+  group: { outcomes: number; exact: number; goalDiff: number; points: number };
+  knockout: { runnerUp: number; champion: number; points: number };
+  total: number;
+};
+
 type AttemptSummary = {
   attempt: number;
   status: "draft" | "complete" | "locked";
@@ -14,6 +20,8 @@ type AttemptSummary = {
   updatedAt: string;
   completedAt: string | null;
   groupCount: number;
+  points?: number;
+  breakdown?: ScoreBreakdown | null;
 };
 
 export default function PollaDashboardPage() {
@@ -127,6 +135,8 @@ export default function PollaDashboardPage() {
         updatedAt: "",
         completedAt: null,
         groupCount: 0,
+        points: 0,
+        breakdown: null,
       },
     );
   }
@@ -196,6 +206,8 @@ export default function PollaDashboardPage() {
             <ul className="grid gap-4">
               {rows.map((row) => {
                 const completed = row.status === "complete" || row.status === "locked";
+                const hasPrediction = row.updatedAt !== "" || completed || row.groupCount > 0;
+                const points = row.points ?? 0;
                 return (
                   <li
                     key={row.attempt}
@@ -233,7 +245,24 @@ export default function PollaDashboardPage() {
                         )}
                       </div>
                     </div>
-                    <div />
+                    <div className="flex md:justify-center">
+                      {hasPrediction && (
+                        <div className="flex flex-col items-start md:items-center">
+                          <span className="font-mono text-[10px] uppercase tracking-[0.3em] text-[var(--foreground-muted)]">
+                            Puntos
+                          </span>
+                          <span className="font-mono text-2xl font-black tabular-nums leading-none">
+                            {points}
+                          </span>
+                          {row.breakdown && points > 0 && (
+                            <span className="mt-1 font-mono text-[10px] text-[var(--foreground-muted)]">
+                              {row.breakdown.group.points} grupos ·{" "}
+                              {row.breakdown.knockout.points} elim.
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
                     <div className="flex flex-wrap gap-3">
                       <Link
                         href={`/polla/tablero/predict/${row.attempt}`}

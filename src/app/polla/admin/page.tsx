@@ -13,7 +13,9 @@ type AdminUser = {
   email: string;
   name: string;
   attemptsAllowed: number;
-  createdAt: string | Date;
+  pollasFilled?: number;
+  source?: "fondo" | "polla";
+  createdAt?: string | Date;
 };
 
 type LeaderboardRow = {
@@ -450,7 +452,9 @@ export default function PollaAdminPage() {
               3 · Participantes existentes
             </h2>
             <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-[var(--foreground-muted)]">
-              {loading ? "Cargando..." : `${users.length} participante${users.length === 1 ? "" : "s"}`}
+              {loading
+                ? "Cargando..."
+                : `${users.length} participante${users.length === 1 ? "" : "s"} · ${users.filter((u) => u.source !== "polla").length} fondo · ${users.filter((u) => u.source === "polla").length} polla`}
             </span>
           </div>
           {users.length === 0 ? (
@@ -461,26 +465,52 @@ export default function PollaAdminPage() {
             </p>
           ) : (
             <ul className="mt-4 divide-y divide-[var(--line)]">
-              {users.map((u) => (
-                <li
-                  key={u.cedula}
-                  className="grid grid-cols-1 gap-2 py-3 md:grid-cols-[1.4fr_1fr_auto] md:items-center"
-                >
-                  <div>
-                    <p className="text-sm font-semibold">{u.name}</p>
-                    <p className="font-mono text-xs text-[var(--foreground-muted)]">
-                      {u.email || u.cedula}
+              {users.map((u) => {
+                const filled = u.pollasFilled ?? 0;
+                return (
+                  <li
+                    key={`${u.source ?? "x"}-${u.cedula}`}
+                    className="grid grid-cols-1 gap-2 py-3 md:grid-cols-[1.4fr_1fr_auto_auto] md:items-center"
+                  >
+                    <div>
+                      <p className="flex items-center gap-2 text-sm font-semibold">
+                        {u.name}
+                        <span
+                          className={
+                            "inline-flex items-center px-2 py-0.5 font-mono text-[9px] uppercase tracking-[0.18em] " +
+                            (u.source === "polla"
+                              ? "bg-[var(--brand)]/10 text-[var(--brand)]"
+                              : "bg-[var(--foreground)]/10 text-[var(--foreground-soft)]")
+                          }
+                        >
+                          {u.source === "polla" ? "Polla" : "Fondo"}
+                        </span>
+                      </p>
+                      <p className="font-mono text-xs text-[var(--foreground-muted)]">
+                        {u.email || u.cedula}
+                      </p>
+                    </div>
+                    <p className="font-mono text-xs text-[var(--foreground-soft)]">
+                      CC {u.cedula}
                     </p>
-                  </div>
-                  <p className="font-mono text-xs text-[var(--foreground-soft)]">
-                    CC {u.cedula}
-                  </p>
-                  <span className="inline-flex w-fit items-center gap-2 border border-[var(--foreground)] px-3 py-1 font-mono text-[10px] uppercase tracking-[0.18em]">
-                    {u.attemptsAllowed} intento
-                    {u.attemptsAllowed === 1 ? "" : "s"}
-                  </span>
-                </li>
-              ))}
+                    <span
+                      className={
+                        "inline-flex w-fit items-center gap-2 px-3 py-1 font-mono text-[10px] uppercase tracking-[0.18em] " +
+                        (filled > 0
+                          ? "border border-emerald-600 text-emerald-700"
+                          : "border border-[var(--line)] text-[var(--foreground-muted)]")
+                      }
+                    >
+                      {filled} polla{filled === 1 ? "" : "s"} llena
+                      {filled === 1 ? "" : "s"}
+                    </span>
+                    <span className="inline-flex w-fit items-center gap-2 border border-[var(--foreground)] px-3 py-1 font-mono text-[10px] uppercase tracking-[0.18em]">
+                      {u.attemptsAllowed} intento
+                      {u.attemptsAllowed === 1 ? "" : "s"}
+                    </span>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </section>

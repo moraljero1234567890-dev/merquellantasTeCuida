@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { isPollaAdminRequest } from "@/lib/polla/admin-auth";
-import { createPollaUser, listAllPollaParticipants, listAllPollaUsers } from "@/lib/polla/store";
+import { createPollaUser, getPredictionCountsByUser, listAllPollaParticipants } from "@/lib/polla/store";
 
 export const dynamic = "force-dynamic";
 
@@ -9,8 +9,15 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
   try {
-    const participants = await listAllPollaParticipants();
-    return NextResponse.json({ users: participants });
+    const [participants, counts] = await Promise.all([
+      listAllPollaParticipants(),
+      getPredictionCountsByUser(),
+    ]);
+    const users = participants.map((p) => ({
+      ...p,
+      pollasFilled: counts[p.cedula] ?? 0,
+    }));
+    return NextResponse.json({ users });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Database error";
     return NextResponse.json({ error: "Database error", detail: msg }, { status: 500 });
