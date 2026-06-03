@@ -12,6 +12,7 @@ export const SERVICIOS = [
   'Alineación',
   'Cambio de aceites caja',
   'Cambio de aceite diferencial',
+  'Cambio de aceite',
   'Filtro de aire primario',
   'Filtro de aire secundario',
   'Filtro aceite',
