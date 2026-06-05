@@ -998,49 +998,20 @@ export type StreamEvent =
 
 export type StreamEmit = (event: StreamEvent) => void;
 
-export async function searchAndStream(
+// Log in, run the search and read the result rows — retrying on a fresh page
+// up to 3 times. ContiLink occasionally navigates mid-evaluate ("Execution
+// context was destroyed"), which is transient: a clean page heals it.
+async function searchWithRetry(
   query: string,
-  emit: StreamEmit,
-  limit = 200
-): Promise<void> {
-  return withLock(async () => {
+  limit: number
+): Promise<{
+  page: Page;
+  meta: { articleNum: string; brand: string; description: string }[];
+  debug: SearchVMSnapshot;
+}> {
+  for (let attempt = 1; ; attempt++) {
+    const page = await getPage();
     try {
-      // 0. Cache-first: a recent identical search renders instantly, and if
-      // every article is cached too we never even touch the browser.
-      const cachedItems = await loadCachedSearch(query);
-      if (cachedItems?.length) {
-        console.log(`[conti] search "${query}" served from cache`);
-        emit({
-          type: "results",
-          items: cachedItems,
-          debug: { triggered: true, triggerReason: "cache" },
-        });
-        const cachedAvail = await loadCachedAvail(
-          cachedItems.map((m) => m.articleNum)
-        );
-        const toScrape = cachedItems.filter((m) => {
-          const c = cachedAvail.get(m.articleNum);
-          if (!c) return true;
-          emit({
-            type: "availability",
-            articleNum: m.articleNum,
-            available: c.available,
-            warehouse: c.warehouse,
-            pvd: c.pvd,
-          });
-          return false;
-        });
-        if (toScrape.length === 0) return; // fully served from cache
-
-        const page = await getPage();
-        await ensureLoggedIn(page);
-        await clearCart(page);
-        await runSearch(page, query);
-        await streamArticles(page, query, toScrape, emit);
-        return;
-      }
-
-      const page = await getPage();
       await ensureLoggedIn(page);
       await clearCart(page);
       const debug = await runSearch(page, query);
@@ -1149,6 +1120,56 @@ export async function searchAndStream(
         );
         meta = domMeta;
       }
+
+      return { page, meta, debug };
+    } catch (err) {
+      await captureError(page, "search", err);
+      if (attempt >= 3) throw err;
+      console.log(`[conti] search attempt ${attempt} failed, retrying "${query}"`);
+    }
+  }
+}
+
+export async function searchAndStream(
+  query: string,
+  emit: StreamEmit,
+  limit = 200
+): Promise<void> {
+  return withLock(async () => {
+    try {
+      // 0. Cache-first: a recent identical search renders instantly, and if
+      // every article is cached too we never even touch the browser.
+      const cachedItems = await loadCachedSearch(query);
+      if (cachedItems?.length) {
+        console.log(`[conti] search "${query}" served from cache`);
+        emit({
+          type: "results",
+          items: cachedItems,
+          debug: { triggered: true, triggerReason: "cache" },
+        });
+        const cachedAvail = await loadCachedAvail(
+          cachedItems.map((m) => m.articleNum)
+        );
+        const toScrape = cachedItems.filter((m) => {
+          const c = cachedAvail.get(m.articleNum);
+          if (!c) return true;
+          emit({
+            type: "availability",
+            articleNum: m.articleNum,
+            available: c.available,
+            warehouse: c.warehouse,
+            pvd: c.pvd,
+          });
+          return false;
+        });
+        if (toScrape.length === 0) return; // fully served from cache
+
+        const page = await searchWithRetry(query, limit).then((r) => r.page);
+        await streamArticles(page, query, toScrape, emit);
+        return;
+      }
+
+      const { page, meta, debug } = await searchWithRetry(query, limit);
 
       // Emit results immediately so the UI can render the table right away.
       emit({ type: "results", items: meta, debug });

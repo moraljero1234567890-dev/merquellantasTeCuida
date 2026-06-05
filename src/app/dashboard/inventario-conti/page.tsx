@@ -131,38 +131,55 @@ export default function InventarioContiPage() {
       }
     };
 
-    try {
-      const r = await fetch('/api/conti/stream', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ query }),
-      });
-      if (!r.ok || !r.body) {
-        const j = await r.json().catch(() => ({}));
-        setErr(j.error || `HTTP ${r.status}`);
-        return;
-      }
+    const attemptStream = async () => {
+      try {
+        const r = await fetch('/api/conti/stream', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ query }),
+        });
+        if (!r.ok || !r.body) {
+          const j = await r.json().catch(() => ({}));
+          if (runIdRef.current === runId) setErr(j.error || `HTTP ${r.status}`);
+          return;
+        }
 
-      const reader = r.body.getReader();
-      const decoder = new TextDecoder();
-      let buf = '';
-      for (;;) {
-        const { done, value } = await reader.read();
-        if (done) break;
-        buf += decoder.decode(value, { stream: true });
-        let idx;
-        while ((idx = buf.indexOf('\n')) >= 0) {
-          const line = buf.slice(0, idx).trim();
-          buf = buf.slice(idx + 1);
-          if (!line) continue;
-          try {
-            handleEvent(JSON.parse(line) as StreamEvent);
-          } catch {}
+        const reader = r.body.getReader();
+        const decoder = new TextDecoder();
+        let buf = '';
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buf += decoder.decode(value, { stream: true });
+          let idx;
+          while ((idx = buf.indexOf('\n')) >= 0) {
+            const line = buf.slice(0, idx).trim();
+            buf = buf.slice(idx + 1);
+            if (!line) continue;
+            try {
+              handleEvent(JSON.parse(line) as StreamEvent);
+            } catch {}
+          }
+        }
+      } catch (e) {
+        if (runIdRef.current === runId) {
+          setErr(e instanceof Error ? e.message : 'Conexión perdida');
         }
       }
-    } catch (e) {
-      if (runIdRef.current === runId) {
-        setErr(e instanceof Error ? e.message : 'Conexión perdida');
+    };
+
+    try {
+      // Up to 2 attempts at the whole stream: a transient scraper failure
+      // (e.g. "Execution context was destroyed") can kill the search before
+      // any results arrive — just run it again instead of showing the error.
+      for (let attempt = 1; attempt <= 2; attempt++) {
+        if (runIdRef.current !== runId) return;
+        if (attempt > 1) {
+          setErr(null);
+          await new Promise((r) => setTimeout(r, 1500));
+        }
+        await attemptStream();
+        if (runIdRef.current !== runId || itemsRef.current !== null) break;
       }
     } finally {
       if (runIdRef.current === runId) {
