@@ -7,7 +7,7 @@ export const maxDuration = 90;
 
 // Simple in-memory cache (per server instance)
 const cache = new Map<string, { data: unknown; ts: number }>();
-const TTL = 60 * 1000; // 1 minute
+const TTL = 5 * 60 * 1000; // 5 minutes — stock doesn't move that fast
 
 function getCached(key: string) {
   const v = cache.get(key);
@@ -61,9 +61,13 @@ export async function POST(req: NextRequest) {
     // Warm browser (avoids cold start penalties)
     await ensureWarm().catch(() => {});
 
+    // Longer than every internal puppeteer timeout on purpose: the scrape
+    // must fail (and release its lock + reset the page) before this fires,
+    // otherwise it keeps running in the background and later requests queue
+    // behind a dead one.
     const result = await withTimeout(
       getOneAvailability(articleNum, query),
-      45000 // 45 seconds max
+      80000
     );
 
     setCache(cacheKey, result);

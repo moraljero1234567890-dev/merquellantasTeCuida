@@ -692,6 +692,10 @@ export async function getOneAvailability(
       await page.click('button[ng-click="searchVM.addSearchResultsToCart()"]');
 
       // 4. Wait for the cart row's availability to render, then read it.
+      // Keep this shorter than the HTTP route's timeout wrapper: if it can't
+      // resolve, we want to fail HERE so captureError resets the page and the
+      // lock is released — otherwise the scrape keeps running in the
+      // background and every later request queues behind it.
       await page.waitForFunction(
         (art) => {
           const rows = document.querySelectorAll(
@@ -703,7 +707,7 @@ export async function getOneAvailability(
           }
           return false;
         },
-        { timeout: 60000 },
+        { timeout: 30000 },
         articleNum
       );
 
@@ -741,9 +745,7 @@ export async function getOneAvailability(
   });
 }
 
-// ----- Streaming variant: search + all availabilities in one invocation -----
-// Used by /api/conti/stream. One login, one search, one cart add for every
-// result — availabilities are emitted as ContiLink resolves them.
+// ----- Unused streaming variant, kept for reference -----
 export type StreamEvent =
   | {
       type: "results";
