@@ -66,10 +66,21 @@ export default function InventarioContiPage() {
     itemsRef.current = items;
   }, [items]);
 
-  // Warm the Continental browser session as soon as the page loads so the
-  // first search doesn't pay the full login penalty.
+  // Keep the Continental browser session warm while the page is open: on
+  // load, every 4 minutes, and when the tab regains focus — so searches hit
+  // a logged-in instance instead of paying Chromium launch + login.
   useEffect(() => {
-    fetch('/api/conti/warm', { method: 'POST' }).catch(() => {});
+    const warm = () => fetch('/api/conti/warm', { method: 'POST' }).catch(() => {});
+    warm();
+    const interval = setInterval(warm, 4 * 60 * 1000);
+    const onFocus = () => {
+      if (document.visibilityState === 'visible') warm();
+    };
+    document.addEventListener('visibilitychange', onFocus);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onFocus);
+    };
   }, []);
 
   async function run(e: React.FormEvent) {

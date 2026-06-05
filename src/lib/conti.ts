@@ -5,6 +5,7 @@ import puppeteer, { Browser, Page, HTTPRequest } from "puppeteer-core";
 import chromium from "@sparticuz/chromium";
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import { getDb } from "./db";
 
 const CONTI_URL = process.env.CONTI_URL!;
 const USER = process.env.CONTI_USERNAME!;
@@ -39,6 +40,112 @@ declare global {
   var _contiQueue: Promise<unknown> | undefined;
   // eslint-disable-next-line no-var
   var _contiLastError: ContiError | undefined;
+  // eslint-disable-next-line no-var
+  var _contiTriedCookies: boolean | undefined;
+}
+
+// ---------------------------------------------------------------------------
+// Mongo-backed shared state: persisted login cookies (so a cold serverless
+// instance skips the ContiLink login form, ~15-20s) and short-TTL caches for
+// search results + per-article availability (so repeated searches resolve
+// instantly across instances).
+// ---------------------------------------------------------------------------
+
+const COOKIE_TTL_MS = 12 * 60 * 60 * 1000; // half a day
+const CACHE_TTL_MS = 10 * 60 * 1000; // stock/prices don't move that fast
+
+async function tryRestoreSession(page: Page): Promise<boolean> {
+  try {
+    const db = await getDb();
+    const doc = await db.collection<any>("conti_state").findOne({ _id: "cookies" });
+    if (!doc?.cookies?.length) return false;
+    if (Date.now() - new Date(doc.at).getTime() > COOKIE_TTL_MS) return false;
+    await page.setCookie(...doc.cookies);
+    console.log(`[conti] restored ${doc.cookies.length} persisted cookies`);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function persistSession(page: Page) {
+  try {
+    const cookies = await page.cookies();
+    if (!cookies.length) return;
+    const db = await getDb();
+    await db
+      .collection<any>("conti_state")
+      .replaceOne({ _id: "cookies" }, { cookies, at: new Date() }, { upsert: true });
+  } catch {}
+}
+
+async function loadCachedSearch(
+  query: string
+): Promise<{ articleNum: string; brand: string; description: string }[] | null> {
+  try {
+    const db = await getDb();
+    const doc = await db
+      .collection<any>("conti_search_cache")
+      .findOne({ _id: query.trim().toLowerCase() });
+    if (!doc?.items) return null;
+    if (Date.now() - new Date(doc.at).getTime() > CACHE_TTL_MS) return null;
+    return doc.items;
+  } catch {
+    return null;
+  }
+}
+
+async function saveCachedSearch(
+  query: string,
+  items: { articleNum: string; brand: string; description: string }[]
+) {
+  try {
+    const db = await getDb();
+    await db
+      .collection<any>("conti_search_cache")
+      .replaceOne(
+        { _id: query.trim().toLowerCase() },
+        { items, at: new Date() },
+        { upsert: true }
+      );
+  } catch {}
+}
+
+async function loadCachedAvail(
+  articleNums: string[]
+): Promise<Map<string, OneAvailability>> {
+  const map = new Map<string, OneAvailability>();
+  if (!articleNums.length) return map;
+  try {
+    const db = await getDb();
+    const since = new Date(Date.now() - CACHE_TTL_MS);
+    const docs = await db
+      .collection<any>("conti_avail_cache")
+      .find({ _id: { $in: articleNums }, at: { $gte: since } })
+      .toArray();
+    for (const d of docs) {
+      map.set(String(d._id), {
+        articleNum: String(d._id),
+        available: d.available,
+        warehouse: d.warehouse || "",
+        pvd: d.pvd ?? null,
+      });
+    }
+  } catch {}
+  return map;
+}
+
+async function saveCachedAvail(r: OneAvailability) {
+  try {
+    const db = await getDb();
+    await db
+      .collection<any>("conti_avail_cache")
+      .replaceOne(
+        { _id: r.articleNum },
+        { available: r.available, warehouse: r.warehouse, pvd: r.pvd, at: new Date() },
+        { upsert: true }
+      );
+  } catch {}
 }
 
 async function getBrowser(): Promise<Browser> {
@@ -47,6 +154,8 @@ async function getBrowser(): Promise<Browser> {
   if (global._contiBrowser?.connected) return global._contiBrowser;
 
   const executablePath = await chromium.executablePath();
+
+  global._contiTriedCookies = false;
 
   const browser = await puppeteer.launch({
   executablePath,
@@ -253,6 +362,13 @@ async function ensureLoggedIn(page: Page) {
     await dismissConsent(page).catch(() => {});
     return;
   }
+  // Cold browser: restore the persisted ContiLink session first — when the
+  // cookies are still valid the order page loads directly and we skip the
+  // login form entirely (~15-20s). Once per browser launch.
+  if (!global._contiTriedCookies) {
+    global._contiTriedCookies = true;
+    await tryRestoreSession(page);
+  }
   await page.goto(CONTI_URL, { waitUntil: "domcontentloaded" });
   await dismissConsent(page).catch(() => {});
   if (await isOnOrderPage(page)) return;
@@ -268,6 +384,8 @@ async function ensureLoggedIn(page: Page) {
   // Cookie banners often appear ~1s after first paint — sweep again
   await new Promise((r) => setTimeout(r, 800));
   await dismissConsent(page).catch(() => {});
+  // Fresh login succeeded — persist it so the next cold instance skips it.
+  await persistSession(page);
 }
 
 export async function ensureWarm(): Promise<{ warmed: boolean }> {
@@ -778,7 +896,7 @@ async function readOneFromResults(
   // for "—" once the row has sat without a figure for a while.
   const start = Date.now();
   const MAX_WAIT = 30000;
-  const SETTLE_MS = 10000;
+  const SETTLE_MS = 8000;
   let rowSeenAt = 0;
   for (;;) {
     const states = await page.evaluate(readCartRowsInPage, [articleNum]);
@@ -833,12 +951,18 @@ export async function getOneAvailability(
   articleNum: string,
   originalQuery?: string
 ): Promise<OneAvailability> {
+  // Shared cache first — answers instantly and across instances.
+  const cached = (await loadCachedAvail([articleNum])).get(articleNum);
+  if (cached) return cached;
+
   return withLock(async () => {
     const t0 = Date.now();
     for (let attempt = 1; ; attempt++) {
       const page = await getPage();
       try {
-        return await fetchOneAvailability(page, articleNum, originalQuery);
+        const result = await fetchOneAvailability(page, articleNum, originalQuery);
+        await saveCachedAvail(result);
+        return result;
       } catch (err) {
         await captureError(page, "availability", err);
         // One automatic retry on a fresh page — a wedged Angular page is the
@@ -880,8 +1004,43 @@ export async function searchAndStream(
   limit = 200
 ): Promise<void> {
   return withLock(async () => {
-    const page = await getPage();
     try {
+      // 0. Cache-first: a recent identical search renders instantly, and if
+      // every article is cached too we never even touch the browser.
+      const cachedItems = await loadCachedSearch(query);
+      if (cachedItems?.length) {
+        console.log(`[conti] search "${query}" served from cache`);
+        emit({
+          type: "results",
+          items: cachedItems,
+          debug: { triggered: true, triggerReason: "cache" },
+        });
+        const cachedAvail = await loadCachedAvail(
+          cachedItems.map((m) => m.articleNum)
+        );
+        const toScrape = cachedItems.filter((m) => {
+          const c = cachedAvail.get(m.articleNum);
+          if (!c) return true;
+          emit({
+            type: "availability",
+            articleNum: m.articleNum,
+            available: c.available,
+            warehouse: c.warehouse,
+            pvd: c.pvd,
+          });
+          return false;
+        });
+        if (toScrape.length === 0) return; // fully served from cache
+
+        const page = await getPage();
+        await ensureLoggedIn(page);
+        await clearCart(page);
+        await runSearch(page, query);
+        await streamArticles(page, query, toScrape, emit);
+        return;
+      }
+
+      const page = await getPage();
       await ensureLoggedIn(page);
       await clearCart(page);
       const debug = await runSearch(page, query);
@@ -1012,59 +1171,24 @@ export async function searchAndStream(
         return;
       }
 
-      // Check articles ONE at a time, exactly like the proven single-article
-      // flow: ContiLink resolves a single-item cart in a few seconds, while
-      // dumping the whole result set into the cart at once leaves the cart
-      // "checking" longer than any reasonable budget (the all-"—" failure
-      // mode). Each value is emitted the moment it's read, so the first
-      // rows reach the UI within seconds of the results.
-      let p = page;
-      const deadline = Date.now() + 240000; // headroom under maxDuration=300
-      let done = 0;
-      for (const m of meta) {
-        if (Date.now() > deadline) {
-          // Out of budget — mark the rest retryable instead of hanging.
-          emit({
-            type: "availability",
-            articleNum: m.articleNum,
-            available: "error",
-            warehouse: "",
-            pvd: null,
-          });
-          continue;
-        }
-        try {
-          const r = await readOneFromResults(p, m.articleNum);
-          done++;
-          console.log(
-            `[conti] +1 availability ${m.articleNum} (${done}/${meta.length})`
-          );
-          emit({
-            type: "availability",
-            articleNum: m.articleNum,
-            available: r.available,
-            warehouse: r.warehouse,
-            pvd: r.pvd,
-          });
-        } catch (err) {
-          console.error(`[conti] stream item ${m.articleNum} failed:`, err);
-          emit({
-            type: "availability",
-            articleNum: m.articleNum,
-            available: "error",
-            warehouse: "",
-            pvd: null,
-          });
-          // Reset the page and restore the search so the remaining articles
-          // can still resolve.
-          try {
-            await captureError(p, "stream-item", err);
-            p = await getPage();
-            await ensureLoggedIn(p);
-            await runSearch(p, query);
-          } catch {}
-        }
-      }
+      await saveCachedSearch(query, meta);
+
+      // Serve whatever per-article values the shared cache already has.
+      const cachedAvail = await loadCachedAvail(meta.map((m) => m.articleNum));
+      const toScrape = meta.filter((m) => {
+        const c = cachedAvail.get(m.articleNum);
+        if (!c) return true;
+        emit({
+          type: "availability",
+          articleNum: m.articleNum,
+          available: c.available,
+          warehouse: c.warehouse,
+          pvd: c.pvd,
+        });
+        return false;
+      });
+
+      await streamArticles(page, query, toScrape, emit);
     } catch (err) {
       const p = global._contiPage;
       if (p && !p.isClosed()) await captureError(p, "lookup", err);
@@ -1072,6 +1196,67 @@ export async function searchAndStream(
       emit({ type: "error", error: msg });
     }
   });
+}
+
+// Check articles ONE at a time, exactly like the proven single-article flow:
+// ContiLink resolves a single-item cart in a few seconds, while dumping the
+// whole result set into the cart at once leaves the cart "checking" longer
+// than any reasonable budget (the all-"—" failure mode). Each value is
+// emitted the moment it's read and written to the shared cache.
+async function streamArticles(
+  page: Page,
+  query: string,
+  toScrape: { articleNum: string }[],
+  emit: StreamEmit
+) {
+  let p = page;
+  const deadline = Date.now() + 240000; // headroom under maxDuration=300
+  let done = 0;
+  for (const m of toScrape) {
+    if (Date.now() > deadline) {
+      // Out of budget — mark the rest retryable instead of hanging.
+      emit({
+        type: "availability",
+        articleNum: m.articleNum,
+        available: "error",
+        warehouse: "",
+        pvd: null,
+      });
+      continue;
+    }
+    try {
+      const r = await readOneFromResults(p, m.articleNum);
+      done++;
+      console.log(
+        `[conti] +1 availability ${m.articleNum} (${done}/${toScrape.length})`
+      );
+      emit({
+        type: "availability",
+        articleNum: m.articleNum,
+        available: r.available,
+        warehouse: r.warehouse,
+        pvd: r.pvd,
+      });
+      await saveCachedAvail({ articleNum: m.articleNum, ...r });
+    } catch (err) {
+      console.error(`[conti] stream item ${m.articleNum} failed:`, err);
+      emit({
+        type: "availability",
+        articleNum: m.articleNum,
+        available: "error",
+        warehouse: "",
+        pvd: null,
+      });
+      // Reset the page and restore the search so the remaining articles
+      // can still resolve.
+      try {
+        await captureError(p, "stream-item", err);
+        p = await getPage();
+        await ensureLoggedIn(p);
+        await runSearch(p, query);
+      } catch {}
+    }
+  }
 }
 
 export async function shutdownConti() {
