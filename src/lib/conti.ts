@@ -625,37 +625,47 @@ export interface OneAvailability {
   pvd: number | null; // company cost price from the cart's PVD column
 }
 
-// Browser-context helpers injected into page.evaluate as source text so both
-// the single-article and streaming readers share the exact same extraction.
-// (Functions can't be closed over across the serialization boundary.)
-const ROW_READER_SRC = `
-  const __text = (el) => (el && el.textContent || "").trim().replace(/\\s+/g, " ");
-  const __parseMoney = (raw) => {
+export interface CartRowState {
+  articleNum: string;
+  available: string;
+  warehouse: string;
+  pvd: number | null;
+}
+
+// Runs INSIDE the browser via page.evaluate(fn, args) — it must be fully
+// self-contained (no closures). Function-based evaluate is mandatory here:
+// string-based evaluation is blocked by ContiLink's CSP and silently sees an
+// empty page. Reads count + warehouse + PVD for every requested article that
+// already has a cart line item rendered.
+function readCartRowsInPage(arts: string[]): CartRowState[] {
+  const text = (el: Element | null | undefined) =>
+    (el?.textContent || "").trim().replace(/\s+/g, " ");
+  const parseMoney = (raw: unknown): number => {
     if (typeof raw === "number") return raw;
-    let s = String(raw == null ? "" : raw).replace(/[^\\d.,]/g, "");
+    let s = String(raw ?? "").replace(/[^\d.,]/g, "");
     if (!s) return NaN;
     const dot = s.lastIndexOf(".");
     const com = s.lastIndexOf(",");
     if (dot >= 0 && com >= 0) {
-      if (com > dot) s = s.replace(/\\./g, "").replace(",", ".");
+      if (com > dot) s = s.replace(/\./g, "").replace(",", ".");
       else s = s.replace(/,/g, "");
     } else if (com >= 0) {
       s = s.length - com - 1 === 3 ? s.replace(/,/g, "") : s.replace(",", ".");
     } else if (dot >= 0 && s.length - dot - 1 === 3) {
-      s = s.replace(/\\./g, "");
+      s = s.replace(/\./g, "");
     }
     return parseFloat(s);
   };
-  const __extractPvd = (row) => {
+  const extractPvd = (row: Element): number | null => {
     // Preferred: the lineItem object on the row's Angular scope.
     try {
-      const ng = window.angular;
+      const ng = (window as any).angular;
       const sc = ng && ng.element(row).scope();
       const li = sc && (sc.lineItem || (sc.$parent && sc.$parent.lineItem));
       if (li && typeof li === "object") {
         for (const k of Object.keys(li)) {
           if (!/pvd|precio|price/i.test(k)) continue;
-          const n = __parseMoney(li[k]);
+          const n = parseMoney((li as any)[k]);
           if (isFinite(n) && n > 0) return n;
         }
       }
@@ -665,23 +675,36 @@ const ROW_READER_SRC = `
     let best = 0;
     for (const d of Array.from(row.querySelectorAll("div, span"))) {
       const t = (d.textContent || "").trim();
-      if (!t || t.length > 24 || !/\\d/.test(t) || !/[$.,]/.test(t)) continue;
-      const n = __parseMoney(t);
+      if (!t || t.length > 24 || !/\d/.test(t) || !/[$.,]/.test(t)) continue;
+      const n = parseMoney(t);
       if (isFinite(n) && n > best) best = n;
     }
     return best > 1000 ? best : null;
   };
-  const __readRow = (row) => {
+
+  const rows = Array.from(
+    document.querySelectorAll(
+      '[ng-repeat^="lineItem in cartItem.availabilityItemList"]'
+    )
+  );
+  const out: CartRowState[] = [];
+  for (const art of arts) {
+    const row = rows.find((r) => (r.textContent || "").includes(art));
+    if (!row) continue;
     const availEl = row.querySelector(".trafficHeight span");
-    const available = availEl ? __text(availEl) : "";
+    const available = availEl ? text(availEl) : "";
     let warehouse = "";
     for (const d of Array.from(row.querySelectorAll("div"))) {
-      const t = __text(d);
-      if (/^[A-Z]{3,5}$/.test(t)) { warehouse = t; break; }
+      const t = text(d);
+      if (/^[A-Z]{3,5}$/.test(t)) {
+        warehouse = t;
+        break;
+      }
     }
-    return { available, warehouse, pvd: __extractPvd(row) };
-  };
-`;
+    out.push({ articleNum: art, available, warehouse, pvd: extractPvd(row) });
+  }
+  return out;
+}
 
 async function articleInDom(page: Page, articleNum: string): Promise<boolean> {
   return await page.evaluate((art) => {
@@ -760,23 +783,10 @@ async function fetchOneAvailability(
   const SETTLE_MS = 15000;
   let rowSeenAt = 0;
   for (;;) {
-    const state = (await page.evaluate(`(() => {
-      ${ROW_READER_SRC}
-      const art = ${JSON.stringify(articleNum)};
-      const rows = Array.from(
-        document.querySelectorAll('[ng-repeat^="lineItem in cartItem.availabilityItemList"]')
-      );
-      const row = rows.find((r) => (r.textContent || "").includes(art));
-      if (!row) return { found: false, available: "", warehouse: "", pvd: null };
-      return Object.assign({ found: true }, __readRow(row));
-    })()`)) as {
-      found: boolean;
-      available: string;
-      warehouse: string;
-      pvd: number | null;
-    };
+    const states = await page.evaluate(readCartRowsInPage, [articleNum]);
+    const state = states[0];
 
-    if (state.found) {
+    if (state) {
       if (state.available) {
         return {
           articleNum,
@@ -1046,25 +1056,7 @@ export async function searchAndStream(
       const SETTLE_MS = 15000;
 
       while (remaining.size > 0 && Date.now() - start < maxWait) {
-        const states = (await page.evaluate(`(() => {
-          ${ROW_READER_SRC}
-          const arts = ${JSON.stringify([...remaining])};
-          const rows = Array.from(
-            document.querySelectorAll('[ng-repeat^="lineItem in cartItem.availabilityItemList"]')
-          );
-          const out = [];
-          for (const art of arts) {
-            const row = rows.find((r) => (r.textContent || "").includes(art));
-            if (!row) continue;
-            out.push(Object.assign({ articleNum: art }, __readRow(row)));
-          }
-          return out;
-        })()`)) as {
-          articleNum: string;
-          available: string;
-          warehouse: string;
-          pvd: number | null;
-        }[];
+        const states = await page.evaluate(readCartRowsInPage, [...remaining]);
 
         const now = Date.now();
         let emitted = 0;
