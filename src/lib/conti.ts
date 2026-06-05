@@ -691,25 +691,46 @@ export async function getOneAvailability(
       await dismissConsent(page).catch(() => {});
       await page.click('button[ng-click="searchVM.addSearchResultsToCart()"]');
 
-      // 4. Wait for the cart row's availability to render, then read it.
-      // Keep this shorter than the HTTP route's timeout wrapper: if it can't
-      // resolve, we want to fail HERE so captureError resets the page and the
-      // lock is released — otherwise the scrape keeps running in the
-      // background and every later request queues behind it.
+      // 4. Wait for the cart line item to render. It's gated behind
+      // ng-if="!cartItem.checking", so its mere presence means ContiLink
+      // finished checking this article. Keep this shorter than the HTTP
+      // route's timeout wrapper: if it can't resolve, we want to fail HERE
+      // so captureError resets the page and the lock is released.
       await page.waitForFunction(
         (art) => {
           const rows = document.querySelectorAll(
             '[ng-repeat^="lineItem in cartItem.availabilityItemList"]'
           );
           for (const r of Array.from(rows)) {
-            if (!(r.textContent || "").includes(art)) continue;
-            if (r.querySelector(".trafficHeight span")) return true;
+            if ((r.textContent || "").includes(art)) return true;
           }
           return false;
         },
         { timeout: 30000 },
         articleNum
       );
+
+      // 5. The traffic-light number is OPTIONAL: some articles (no stock
+      // data for the CO warehouse, discontinued, etc.) never render one.
+      // Give it a few seconds, then read whatever is there — "—" is a valid
+      // answer, not an error. Waiting the full timeout for an element that
+      // will never exist is what made these rows "fail" after minutes.
+      await page
+        .waitForFunction(
+          (art) => {
+            const rows = document.querySelectorAll(
+              '[ng-repeat^="lineItem in cartItem.availabilityItemList"]'
+            );
+            for (const r of Array.from(rows)) {
+              if (!(r.textContent || "").includes(art)) continue;
+              if (r.querySelector(".trafficHeight span")) return true;
+            }
+            return false;
+          },
+          { timeout: 8000 },
+          articleNum
+        )
+        .catch(() => {});
 
       const data = await page.evaluate((art) => {
         const text = (el: Element | null | undefined) =>
