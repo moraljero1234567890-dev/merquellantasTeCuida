@@ -741,7 +741,9 @@ export async function getOneAvailability(
   });
 }
 
-// ----- DEPRECATED stream variant kept temporarily so tooling doesn't break -----
+// ----- Streaming variant: search + all availabilities in one invocation -----
+// Used by /api/conti/stream. One login, one search, one cart add for every
+// result — availabilities are emitted as ContiLink resolves them.
 export type StreamEvent =
   | {
       type: "results";

@@ -5,7 +5,6 @@ import DashboardNavbar from '../navbar';
 import {
   Boxes,
   Search,
-  Eye,
   RefreshCw,
   AlertCircle,
   Filter,
@@ -15,9 +14,8 @@ interface Item {
   articleNum: string;
   brand: string;
   description: string;
-  available: string | null; // null = not fetched yet, "error" = fetch failed
+  available: string | null; // null = still loading, "error" = fetch failed
   warehouse: string;
-  shown: boolean; // whether the row has been clicked / revealed
 }
 
 interface DebugInfo {
@@ -30,23 +28,26 @@ interface DebugInfo {
   freeTextSearch?: string;
 }
 
+type StreamEvent =
+  | { type: 'results'; items: { articleNum: string; brand: string; description: string }[]; debug?: DebugInfo }
+  | { type: 'availability'; articleNum: string; available: string; warehouse: string }
+  | { type: 'error'; error: string }
+  | { type: 'done' };
+
 export default function InventarioContiPage() {
   const [query, setQuery] = useState('');
   const [items, setItems] = useState<Item[] | null>(null);
   const [searchedQuery, setSearchedQuery] = useState<string>('');
   const [elapsed, setElapsed] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
+  const [streaming, setStreaming] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const [debug, setDebug] = useState<DebugInfo | null>(null);
-  const itemsRef = useRef<Item[] | null>(null);
-
-  useEffect(() => {
-    itemsRef.current = items;
-  }, [items]);
+  const runIdRef = useRef(0);
 
   // Warm the Continental browser session as soon as the page loads so the
-  // first search doesn't pay the login penalty.
+  // first search doesn't pay the full login penalty.
   useEffect(() => {
     fetch('/api/conti/warm', { method: 'POST' }).catch(() => {});
   }, []);
@@ -54,58 +55,100 @@ export default function InventarioContiPage() {
   async function run(e: React.FormEvent) {
     e.preventDefault();
     if (!query.trim()) return;
+    const runId = ++runIdRef.current;
     setErr(null);
     setItems(null);
     setElapsed(null);
     setDebug(null);
     setLoading(true);
+    setStreaming(true);
     const t0 = performance.now();
 
+    const handleEvent = (ev: StreamEvent) => {
+      if (runIdRef.current !== runId) return; // stale stream
+      if (ev.type === 'results') {
+        setDebug(ev.debug || null);
+        setSearchedQuery(query);
+        setElapsed(Math.round(performance.now() - t0));
+        setItems(
+          (ev.items || []).map((m) => ({
+            articleNum: m.articleNum,
+            brand: m.brand,
+            description: m.description,
+            available: null,
+            warehouse: '',
+          }))
+        );
+        setLoading(false);
+      } else if (ev.type === 'availability') {
+        setItems((prev) =>
+          prev
+            ? prev.map((it) =>
+                it.articleNum === ev.articleNum
+                  ? { ...it, available: ev.available || '—', warehouse: ev.warehouse || '' }
+                  : it
+              )
+            : prev
+        );
+      } else if (ev.type === 'error') {
+        setErr(ev.error || 'Error desconocido');
+      }
+    };
+
     try {
-      const r = await fetch('/api/conti/lookup', {
+      const r = await fetch('/api/conti/stream', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ query }),
       });
-      const j = await r.json();
-      if (!r.ok) {
+      if (!r.ok || !r.body) {
+        const j = await r.json().catch(() => ({}));
         setErr(j.error || `HTTP ${r.status}`);
         return;
       }
-      setDebug(j.debug || null);
-      setSearchedQuery(query);
-      setItems(
-        (j.items || []).map((m: { articleNum: string; brand: string; description: string }) => ({
-          articleNum: m.articleNum,
-          brand: m.brand,
-          description: m.description,
-          available: null,
-          warehouse: '',
-          shown: false,
-        }))
-      );
-      setElapsed(Math.round(performance.now() - t0));
+
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, idx).trim();
+          buf = buf.slice(idx + 1);
+          if (!line) continue;
+          try {
+            handleEvent(JSON.parse(line) as StreamEvent);
+          } catch {}
+        }
+      }
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Conexión perdida');
+      if (runIdRef.current === runId) {
+        setErr(e instanceof Error ? e.message : 'Conexión perdida');
+      }
     } finally {
-      setLoading(false);
+      if (runIdRef.current === runId) {
+        setLoading(false);
+        setStreaming(false);
+        // Anything the stream never resolved becomes retryable.
+        setItems((prev) =>
+          prev
+            ? prev.map((it) => (it.available === null ? { ...it, available: 'error' } : it))
+            : prev
+        );
+      }
     }
   }
 
-  async function reveal(articleNum: string) {
-    const cur = itemsRef.current?.find((x) => x.articleNum === articleNum);
-    if (!cur) return;
-
+  // Per-row retry for availabilities the stream couldn't resolve.
+  async function retry(articleNum: string) {
     setItems((prev) =>
       prev
-        ? prev.map((it) =>
-            it.articleNum === articleNum ? { ...it, shown: true } : it
-          )
+        ? prev.map((it) => (it.articleNum === articleNum ? { ...it, available: null } : it))
         : prev
     );
-
-    if (cur.available !== null && cur.available !== 'error') return;
-
     try {
       const r = await fetch('/api/conti/availability', {
         method: 'POST',
@@ -118,11 +161,7 @@ export default function InventarioContiPage() {
         prev
           ? prev.map((it) =>
               it.articleNum === articleNum
-                ? {
-                    ...it,
-                    available: j.available || '—',
-                    warehouse: j.warehouse || '',
-                  }
+                ? { ...it, available: j.available || '—', warehouse: j.warehouse || '' }
                 : it
             )
           : prev
@@ -131,22 +170,10 @@ export default function InventarioContiPage() {
       setItems((prev) =>
         prev
           ? prev.map((it) =>
-              it.articleNum === articleNum
-                ? { ...it, available: 'error', warehouse: '' }
-                : it
+              it.articleNum === articleNum ? { ...it, available: 'error', warehouse: '' } : it
             )
           : prev
       );
-    }
-  }
-
-  async function revealAll() {
-    const snapshot = itemsRef.current;
-    if (!snapshot) return;
-    for (const it of snapshot) {
-      if (it.shown) continue;
-      // Sequential on purpose — the scraper serializes on one browser page.
-      await reveal(it.articleNum);
     }
   }
 
@@ -162,12 +189,10 @@ export default function InventarioContiPage() {
     );
   }, [items, filter]);
 
-  const cachedCount = items
+  const resolvedCount = items
     ? items.filter((i) => i.available !== null && i.available !== 'error').length
     : 0;
-  const pendingShownCount = items
-    ? items.filter((i) => i.shown && i.available === null).length
-    : 0;
+  const pendingCount = items ? items.filter((i) => i.available === null).length : 0;
 
   return (
     <>
@@ -199,12 +224,13 @@ export default function InventarioContiPage() {
                 />
               </div>
               <button
-                disabled={loading || !query.trim()}
+                disabled={loading || streaming || !query.trim()}
                 className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-white text-sm font-medium shadow-md hover:from-amber-600 hover:to-amber-700 transition-colors disabled:opacity-50"
               >
-                {loading ? (
+                {loading || streaming ? (
                   <>
-                    <RefreshCw size={16} className="animate-spin" /> Buscando…
+                    <RefreshCw size={16} className="animate-spin" />
+                    {loading ? 'Buscando…' : 'Cargando disponibilidad…'}
                   </>
                 ) : (
                   <>
@@ -237,12 +263,12 @@ export default function InventarioContiPage() {
               <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
                 <h2 className="text-xs uppercase tracking-wide text-gray-500">
                   {items.length} resultado{items.length === 1 ? '' : 's'}
-                  {items.length > 0 && cachedCount > 0 && (
-                    <span className="ml-2 text-gray-400">· {cachedCount} en caché</span>
+                  {resolvedCount > 0 && resolvedCount < items.length && (
+                    <span className="ml-2 text-gray-400">· {resolvedCount} listos</span>
                   )}
-                  {pendingShownCount > 0 && (
+                  {pendingCount > 0 && (
                     <span className="ml-2 text-amber-600 animate-pulse">
-                      cargando {pendingShownCount}
+                      cargando {pendingCount}
                     </span>
                   )}
                   {elapsed != null && (
@@ -252,22 +278,14 @@ export default function InventarioContiPage() {
                   )}
                 </h2>
                 {items.length > 0 && (
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={revealAll}
-                      className="inline-flex items-center gap-1.5 text-xs rounded-xl border border-amber-500 text-amber-700 bg-white hover:bg-amber-50 px-3 py-1.5 font-medium transition-colors"
-                    >
-                      <Eye size={14} /> Mostrar todo
-                    </button>
-                    <div className="relative">
-                      <Filter className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
-                      <input
-                        value={filter}
-                        onChange={(e) => setFilter(e.target.value)}
-                        placeholder="filtrar resultados…"
-                        className="text-sm rounded-xl bg-white border border-gray-300 pl-8 pr-3 py-1.5 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 w-56 text-gray-900 placeholder-gray-400"
-                      />
-                    </div>
+                  <div className="relative">
+                    <Filter className="absolute left-3 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-gray-400" />
+                    <input
+                      value={filter}
+                      onChange={(e) => setFilter(e.target.value)}
+                      placeholder="filtrar resultados…"
+                      className="text-sm rounded-xl bg-white border border-gray-300 pl-8 pr-3 py-1.5 outline-none focus:border-amber-500 focus:ring-1 focus:ring-amber-500 w-56 text-gray-900 placeholder-gray-400"
+                    />
                   </div>
                 )}
               </div>
@@ -305,7 +323,7 @@ haveSearchResults:${String(debug.haveSearchResults ?? false)}`}
                     <div className="text-right">Bodega</div>
                   </div>
                   {(filtered || []).map((it) => {
-                    const cached = it.available !== null && it.available !== 'error';
+                    const resolved = it.available !== null && it.available !== 'error';
                     const errored = it.available === 'error';
                     const n = parseInt(it.available || '', 10);
                     const positive = !isNaN(n) && n > 0;
@@ -318,27 +336,15 @@ haveSearchResults:${String(debug.haveSearchResults ?? false)}`}
                         <div className="hidden sm:block text-sm text-gray-600">{it.brand}</div>
                         <div className="text-sm text-gray-800 break-words">{it.description}</div>
                         <div className="text-right">
-                          {!it.shown ? (
+                          {errored ? (
                             <button
-                              onClick={() => reveal(it.articleNum)}
-                              className={
-                                'text-xs rounded-xl px-3 py-1.5 border transition-colors font-medium ' +
-                                (cached
-                                  ? 'border-amber-500 bg-amber-50 text-amber-700 hover:bg-amber-100'
-                                  : 'border-gray-300 bg-white text-gray-700 hover:border-amber-500 hover:text-amber-700')
-                              }
-                            >
-                              {cached ? 'Ver' : 'Mostrar'}
-                            </button>
-                          ) : errored ? (
-                            <button
-                              onClick={() => reveal(it.articleNum)}
+                              onClick={() => retry(it.articleNum)}
                               className="text-xs rounded-xl px-3 py-1.5 border border-red-300 bg-red-50 text-red-700 hover:bg-red-100"
                             >
                               reintentar
                             </button>
-                          ) : !cached ? (
-                            <span className="inline-flex items-center gap-2 text-xs text-gray-500">
+                          ) : !resolved ? (
+                            <span className="inline-flex items-center gap-2 text-xs text-gray-500 justify-end">
                               <span className="inline-block h-3 w-8 rounded bg-gray-200 animate-pulse" />
                               cargando
                             </span>
@@ -356,7 +362,7 @@ haveSearchResults:${String(debug.haveSearchResults ?? false)}`}
                           )}
                         </div>
                         <div className="text-right text-xs text-gray-500">
-                          {it.shown && cached ? it.warehouse || '—' : ''}
+                          {resolved ? it.warehouse || '—' : ''}
                         </div>
                       </div>
                     );
