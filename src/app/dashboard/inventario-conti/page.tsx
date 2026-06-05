@@ -12,12 +12,17 @@ import {
 
 // Sale prices from the company cost (PVD): true commercial margin plus IVA,
 // i.e. precio = PVD / (1 - margen) * 1.19 — NOT a simple markup on cost.
+// Decimal rim sizes (e.g. 215/75R17.5, 295/80R22.5 — truck/trailer tires)
+// carry lower margins than the standard line.
 const IVA = 1.19;
 const MARGENES = [
-  { key: 'general', label: 'General', pct: 0.32 },
-  { key: 'flotas', label: 'Flotas', pct: 0.26 },
-  { key: 'dist', label: 'Dist', pct: 0.22 },
+  { key: 'general', label: 'General', pct: 0.32, pctDecimal: 0.26 },
+  { key: 'flotas', label: 'Flotas', pct: 0.26, pctDecimal: 0.2 },
+  { key: 'dist', label: 'Dist', pct: 0.22, pctDecimal: 0.15 },
 ] as const;
+
+// A size "ending in .5" (17.5 / 19.5 / 22.5 rims and the like).
+const hasDecimalSize = (description: string) => /\d+\.5(?!\d)/.test(description);
 
 const fmtCOP = new Intl.NumberFormat('es-CO', {
   style: 'currency',
@@ -426,19 +431,22 @@ haveSearchResults:${String(debug.haveSearchResults ?? false)}`}
                               </span>
                             )}
                           </div>
-                          {MARGENES.map((m) => (
-                            <div key={m.key} className="text-right">
-                              {pending ? (
-                                <span className="inline-block h-3 w-14 rounded bg-gray-200 animate-pulse" />
-                              ) : resolved && it.pvd ? (
-                                <span className="font-mono text-sm text-gray-900">
-                                  {fmtCOP.format(Math.round((it.pvd / (1 - m.pct)) * IVA))}
-                                </span>
-                              ) : (
-                                <span className="text-gray-300 text-sm">—</span>
-                              )}
-                            </div>
-                          ))}
+                          {MARGENES.map((m) => {
+                            const pct = hasDecimalSize(it.description) ? m.pctDecimal : m.pct;
+                            return (
+                              <div key={m.key} className="text-right">
+                                {pending ? (
+                                  <span className="inline-block h-3 w-14 rounded bg-gray-200 animate-pulse" />
+                                ) : resolved && it.pvd ? (
+                                  <span className="font-mono text-sm text-gray-900">
+                                    {fmtCOP.format(Math.round((it.pvd / (1 - pct)) * IVA))}
+                                  </span>
+                                ) : (
+                                  <span className="text-gray-300 text-sm">—</span>
+                                )}
+                              </div>
+                            );
+                          })}
                           <div className="text-right text-xs text-gray-500">
                             {resolved ? it.warehouse || '—' : ''}
                           </div>
