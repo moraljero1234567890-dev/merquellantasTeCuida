@@ -19,11 +19,19 @@ export type StandingRow = {
   group: string;
 };
 
+// Accepts any match shape carrying the fields we read (MatchDoc on the
+// server, ApiMatch on the client) and tolerates partially-filled drafts
+// where home/away may still be null.
+type StandingsMatch = Pick<MatchDoc, "_id" | "group" | "home" | "away">;
+
 export function computeGroupStandings(
-  groupMatches: MatchDoc[],
-  predictedScores: Record<string, GroupScore>,
+  groupMatches: StandingsMatch[],
+  predictedScores: Record<
+    string,
+    GroupScore | { home: number | null; away: number | null }
+  >,
 ): Record<string, StandingRow[]> {
-  const byGroup: Record<string, MatchDoc[]> = {};
+  const byGroup: Record<string, StandingsMatch[]> = {};
   for (const m of groupMatches) {
     if (!m.group) continue;
     (byGroup[m.group] ??= []).push(m);

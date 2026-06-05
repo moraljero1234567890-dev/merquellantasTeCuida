@@ -10,6 +10,10 @@ import {
   useState,
 } from "react";
 import { formatDate } from "@/data/polla/worldcup2026";
+import {
+  computeGroupStandings,
+  type StandingRow,
+} from "@/lib/polla/bracket";
 import { staticFallback, type ApiMatch } from "@/lib/polla/matches";
 import { usePollaAuth } from "@/lib/polla/use-polla-auth";
 import { displayTeam, normalizeTeam } from "@/lib/polla/team-display";
@@ -369,6 +373,117 @@ function BracketSlot({
   );
 }
 
+function GroupStandingsTable({
+  group,
+  rows,
+}: {
+  group: string;
+  rows: StandingRow[];
+}) {
+  if (!rows.length) return null;
+  const anyPlayed = rows.some((r) => r.played > 0);
+  return (
+    <div className="mt-10">
+      <div className="mb-3 flex items-baseline justify-between border-b border-[var(--foreground)] pb-2">
+        <h2 className="font-mono text-xs font-bold uppercase tracking-[0.3em]">
+          Tabla del grupo {group}
+        </h2>
+        <span className="font-mono text-[10px] uppercase tracking-[0.3em] text-[var(--foreground-muted)]">
+          Según tu pronóstico
+        </span>
+      </div>
+      <div className="overflow-x-auto border border-[var(--line)] bg-white">
+        <table className="w-full min-w-[480px] text-sm">
+          <thead>
+            <tr className="border-b border-[var(--line)] font-mono text-[10px] uppercase tracking-[0.2em] text-[var(--foreground-muted)]">
+              <th className="px-3 py-2 text-left">#</th>
+              <th className="px-3 py-2 text-left">Equipo</th>
+              <th className="px-2 py-2 text-center">PJ</th>
+              <th className="px-2 py-2 text-center">G</th>
+              <th className="px-2 py-2 text-center">E</th>
+              <th className="px-2 py-2 text-center">P</th>
+              <th className="px-2 py-2 text-center">GF</th>
+              <th className="px-2 py-2 text-center">GC</th>
+              <th className="px-2 py-2 text-center">DG</th>
+              <th className="px-3 py-2 text-center">Pts</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => {
+              const team = displayTeam(r.teamCode, r.teamName);
+              const pos = i + 1;
+              const posCls =
+                pos <= 2
+                  ? "border-l-4 border-emerald-600 bg-emerald-50/60"
+                  : pos === 3
+                    ? "border-l-4 border-amber-500 bg-amber-50/60"
+                    : "border-l-4 border-transparent";
+              return (
+                <tr
+                  key={r.teamCode}
+                  className={`border-b border-[var(--line)] last:border-b-0 ${posCls}`}
+                >
+                  <td className="px-3 py-2 font-mono font-black tabular-nums">
+                    {pos}
+                  </td>
+                  <td className="px-3 py-2">
+                    <TeamLink
+                      code={team.code}
+                      name={team.name}
+                      crest={team.crest}
+                      flagClass="h-4 w-6"
+                      textClass="text-xs font-bold uppercase tracking-tight"
+                    />
+                  </td>
+                  <td className="px-2 py-2 text-center font-mono tabular-nums">
+                    {r.played}
+                  </td>
+                  <td className="px-2 py-2 text-center font-mono tabular-nums">
+                    {r.won}
+                  </td>
+                  <td className="px-2 py-2 text-center font-mono tabular-nums">
+                    {r.drawn}
+                  </td>
+                  <td className="px-2 py-2 text-center font-mono tabular-nums">
+                    {r.lost}
+                  </td>
+                  <td className="px-2 py-2 text-center font-mono tabular-nums">
+                    {r.gf}
+                  </td>
+                  <td className="px-2 py-2 text-center font-mono tabular-nums">
+                    {r.ga}
+                  </td>
+                  <td className="px-2 py-2 text-center font-mono tabular-nums">
+                    {r.gd > 0 ? `+${r.gd}` : r.gd}
+                  </td>
+                  <td className="px-3 py-2 text-center font-mono font-black tabular-nums">
+                    {r.points}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+      <div className="mt-2 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-[var(--foreground-soft)]">
+        <span className="flex items-center gap-1.5">
+          <span aria-hidden className="h-2.5 w-2.5 bg-emerald-600" />
+          Clasifica directo (1° y 2°)
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span aria-hidden className="h-2.5 w-2.5 bg-amber-500" />
+          Posible clasificado como mejor tercero
+        </span>
+        {!anyPlayed && (
+          <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-[var(--foreground-muted)]">
+            Llena marcadores para ver posiciones
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
 const STAGE_TITLES: Record<KnockoutPick["stage"], string> = {
   ROUND_OF_32: "Dieciseisavos",
   ROUND_OF_16: "Octavos",
@@ -493,6 +608,45 @@ export default function PollaPredictPage() {
     );
     return map;
   }, [groupMatches]);
+
+  // Preliminary standings, recomputed live from the user's drafted scores so
+  // they can see who goes 1st/2nd/3rd while they fill each group.
+  const standingsByGroup = useMemo(() => {
+    const computed = computeGroupStandings(groupMatches, groupDrafts);
+    // computeGroupStandings only seeds teams that already have a scored
+    // match -- append zero rows so all four teams show from the start.
+    for (const [g, list] of Object.entries(matchesByGroup)) {
+      const rows = (computed[g] ??= []);
+      const seen = new Set(rows.map((r) => r.teamCode));
+      for (const m of list) {
+        for (const side of [m.home, m.away]) {
+          if (seen.has(side.code)) continue;
+          seen.add(side.code);
+          rows.push({
+            teamCode: side.code,
+            teamName: side.name,
+            played: 0,
+            won: 0,
+            drawn: 0,
+            lost: 0,
+            gf: 0,
+            ga: 0,
+            gd: 0,
+            points: 0,
+            group: g,
+          });
+        }
+      }
+      // Re-rank with the appended rows (same tiebreakers as the bracket).
+      rows.sort((a, b) => {
+        if (b.points !== a.points) return b.points - a.points;
+        if (b.gd !== a.gd) return b.gd - a.gd;
+        if (b.gf !== a.gf) return b.gf - a.gf;
+        return a.teamName.localeCompare(b.teamName);
+      });
+    }
+    return computed;
+  }, [groupMatches, matchesByGroup, groupDrafts]);
 
   const filledCount = groupMatches.filter((m) => {
     const d = groupDrafts[m._id];
@@ -946,6 +1100,11 @@ export default function PollaPredictPage() {
                   );
                 })}
               </div>
+
+              <GroupStandingsTable
+                group={activeGroup}
+                rows={standingsByGroup[activeGroup] ?? []}
+              />
             </section>
 
             <section className="mx-auto max-w-6xl px-6 pb-16">
