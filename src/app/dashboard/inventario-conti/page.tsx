@@ -24,6 +24,15 @@ const MARGENES = [
 // A size "ending in .5" (17.5 / 19.5 / 22.5 rims and the like).
 const hasDecimalSize = (description: string) => /\d+\.5(?!\d)/.test(description);
 
+// Let people type the size any way they like — 295/80R22.5, 295 80 22.5,
+// 295-80r22.5 — ContiLink wants the bare digit group (29580225), so keep
+// only the numbers. Short or non-numeric queries pass through untouched.
+const normalizeQuery = (raw: string): string => {
+  const trimmed = raw.trim();
+  const digits = trimmed.replace(/\D+/g, '');
+  return digits.length >= 5 ? digits : trimmed;
+};
+
 const fmtCOP = new Intl.NumberFormat('es-CO', {
   style: 'currency',
   currency: 'COP',
@@ -91,6 +100,7 @@ export default function InventarioContiPage() {
   async function run(e: React.FormEvent) {
     e.preventDefault();
     if (!query.trim()) return;
+    const q = normalizeQuery(query);
     const runId = ++runIdRef.current;
     setErr(null);
     setItems(null);
@@ -104,7 +114,7 @@ export default function InventarioContiPage() {
       if (runIdRef.current !== runId) return; // stale stream
       if (ev.type === 'results') {
         setDebug(ev.debug || null);
-        setSearchedQuery(query);
+        setSearchedQuery(q);
         setElapsed(Math.round(performance.now() - t0));
         setItems(
           (ev.items || []).map((m) => ({
@@ -141,7 +151,7 @@ export default function InventarioContiPage() {
         const r = await fetch('/api/conti/stream', {
           method: 'POST',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ query }),
+          body: JSON.stringify({ query: q }),
         });
         if (!r.ok || !r.body) {
           const j = await r.json().catch(() => ({}));
@@ -299,7 +309,7 @@ export default function InventarioContiPage() {
                   autoFocus
                   value={query}
                   onChange={(e) => setQuery(e.target.value)}
-                  placeholder="Buscar por artículo o medida… ej. 29580225"
+                  placeholder="Buscar por artículo o medida… ej. 295/80R22.5 o 29580225"
                   className="block w-full rounded-2xl border border-gray-300 shadow-sm focus:ring-amber-500 focus:border-amber-500 py-3.5 pl-12 pr-4 text-sm text-gray-900"
                 />
               </div>

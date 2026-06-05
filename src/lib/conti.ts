@@ -418,7 +418,7 @@ async function clearCart(page: Page) {
       })
       .catch(() => 0);
     if (left === 0) return;
-    await new Promise((r) => setTimeout(r, 350));
+    await new Promise((r) => setTimeout(r, 250));
   }
 }
 
@@ -919,7 +919,7 @@ async function readOneFromResults(
     if (Date.now() - start > MAX_WAIT) {
       throw new Error(`Article ${articleNum}: cart row never appeared`);
     }
-    await new Promise((r) => setTimeout(r, 400));
+    await new Promise((r) => setTimeout(r, 250));
   }
 }
 
@@ -1192,7 +1192,7 @@ export async function searchAndStream(
         return;
       }
 
-      await saveCachedSearch(query, meta);
+      void saveCachedSearch(query, meta); // fire-and-forget
 
       // Serve whatever per-article values the shared cache already has.
       const cachedAvail = await loadCachedAvail(meta.map((m) => m.articleNum));
@@ -1258,7 +1258,8 @@ async function streamArticles(
         warehouse: r.warehouse,
         pvd: r.pvd,
       });
-      await saveCachedAvail({ articleNum: m.articleNum, ...r });
+      // Fire-and-forget — don't make the next article wait on Mongo.
+      void saveCachedAvail({ articleNum: m.articleNum, ...r });
     } catch (err) {
       console.error(`[conti] stream item ${m.articleNum} failed:`, err);
       emit({
