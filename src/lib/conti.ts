@@ -622,7 +622,66 @@ export interface OneAvailability {
   articleNum: string;
   available: string;
   warehouse: string;
+  pvd: number | null; // company cost price from the cart's PVD column
 }
+
+// Browser-context helpers injected into page.evaluate as source text so both
+// the single-article and streaming readers share the exact same extraction.
+// (Functions can't be closed over across the serialization boundary.)
+const ROW_READER_SRC = `
+  const __text = (el) => (el && el.textContent || "").trim().replace(/\\s+/g, " ");
+  const __parseMoney = (raw) => {
+    if (typeof raw === "number") return raw;
+    let s = String(raw == null ? "" : raw).replace(/[^\\d.,]/g, "");
+    if (!s) return NaN;
+    const dot = s.lastIndexOf(".");
+    const com = s.lastIndexOf(",");
+    if (dot >= 0 && com >= 0) {
+      if (com > dot) s = s.replace(/\\./g, "").replace(",", ".");
+      else s = s.replace(/,/g, "");
+    } else if (com >= 0) {
+      s = s.length - com - 1 === 3 ? s.replace(/,/g, "") : s.replace(",", ".");
+    } else if (dot >= 0 && s.length - dot - 1 === 3) {
+      s = s.replace(/\\./g, "");
+    }
+    return parseFloat(s);
+  };
+  const __extractPvd = (row) => {
+    // Preferred: the lineItem object on the row's Angular scope.
+    try {
+      const ng = window.angular;
+      const sc = ng && ng.element(row).scope();
+      const li = sc && (sc.lineItem || (sc.$parent && sc.$parent.lineItem));
+      if (li && typeof li === "object") {
+        for (const k of Object.keys(li)) {
+          if (!/pvd|precio|price/i.test(k)) continue;
+          const n = __parseMoney(li[k]);
+          if (isFinite(n) && n > 0) return n;
+        }
+      }
+    } catch {}
+    // Fallback: the largest money-looking cell in the row — the PVD dwarfs
+    // the available count, transit count and weight.
+    let best = 0;
+    for (const d of Array.from(row.querySelectorAll("div, span"))) {
+      const t = (d.textContent || "").trim();
+      if (!t || t.length > 24 || !/\\d/.test(t) || !/[$.,]/.test(t)) continue;
+      const n = __parseMoney(t);
+      if (isFinite(n) && n > best) best = n;
+    }
+    return best > 1000 ? best : null;
+  };
+  const __readRow = (row) => {
+    const availEl = row.querySelector(".trafficHeight span");
+    const available = availEl ? __text(availEl) : "";
+    let warehouse = "";
+    for (const d of Array.from(row.querySelectorAll("div"))) {
+      const t = __text(d);
+      if (/^[A-Z]{3,5}$/.test(t)) { warehouse = t; break; }
+    }
+    return { available, warehouse, pvd: __extractPvd(row) };
+  };
+`;
 
 async function articleInDom(page: Page, articleNum: string): Promise<boolean> {
   return await page.evaluate((art) => {
@@ -701,37 +760,35 @@ async function fetchOneAvailability(
   const SETTLE_MS = 15000;
   let rowSeenAt = 0;
   for (;;) {
-    const state = await page.evaluate((art) => {
-      const text = (el: Element | null | undefined) =>
-        (el?.textContent || "").trim().replace(/\s+/g, " ");
+    const state = (await page.evaluate(`(() => {
+      ${ROW_READER_SRC}
+      const art = ${JSON.stringify(articleNum)};
       const rows = Array.from(
-        document.querySelectorAll(
-          '[ng-repeat^="lineItem in cartItem.availabilityItemList"]'
-        )
+        document.querySelectorAll('[ng-repeat^="lineItem in cartItem.availabilityItemList"]')
       );
       const row = rows.find((r) => (r.textContent || "").includes(art));
-      if (!row) return { found: false as const, available: "", warehouse: "" };
-      const availEl = row.querySelector(".trafficHeight span");
-      const available = availEl ? text(availEl) : "";
-      let warehouse = "";
-      for (const d of Array.from(row.querySelectorAll("div"))) {
-        const t = text(d);
-        if (/^[A-Z]{3,5}$/.test(t)) {
-          warehouse = t;
-          break;
-        }
-      }
-      return { found: true as const, available, warehouse };
-    }, articleNum);
+      if (!row) return { found: false, available: "", warehouse: "", pvd: null };
+      return Object.assign({ found: true }, __readRow(row));
+    })()`)) as {
+      found: boolean;
+      available: string;
+      warehouse: string;
+      pvd: number | null;
+    };
 
     if (state.found) {
       if (state.available) {
-        return { articleNum, available: state.available, warehouse: state.warehouse };
+        return {
+          articleNum,
+          available: state.available,
+          warehouse: state.warehouse,
+          pvd: state.pvd,
+        };
       }
       if (!rowSeenAt) rowSeenAt = Date.now();
       if (Date.now() - rowSeenAt > SETTLE_MS) {
         // Row stable without a figure → ContiLink has none for this article.
-        return { articleNum, available: "—", warehouse: state.warehouse };
+        return { articleNum, available: "—", warehouse: state.warehouse, pvd: state.pvd };
       }
     }
     if (Date.now() - start > MAX_WAIT) {
@@ -764,7 +821,10 @@ export async function getOneAvailability(
   });
 }
 
-// ----- Unused streaming variant, kept for reference -----
+// ----- Streaming variant: search + every availability in ONE invocation -----
+// Used by /api/conti/stream. One login, one search, one cart add for all
+// results — availabilities (count + PVD) are emitted as ContiLink resolves
+// them, far cheaper than one full scrape per article.
 export type StreamEvent =
   | {
       type: "results";
@@ -776,6 +836,7 @@ export type StreamEvent =
       articleNum: string;
       available: string;
       warehouse: string;
+      pvd: number | null;
     }
   | { type: "error"; error: string }
   | { type: "done" };
@@ -971,67 +1032,64 @@ export async function searchAndStream(
       await dismissConsent(page).catch(() => {});
       await page.click('button[ng-click="searchVM.addSearchResultsToCart()"]');
 
-      // Poll cart rows directly. The availability block is wrapped in
-      // ng-if="!cartItem.checking", so the mere presence of `.trafficHeight`
-      // text in the DOM is the authoritative "ready" signal — no scope check
-      // needed (and trying to read scope can mis-skip rows during digest).
+      // Poll cart rows directly. A row renders once ContiLink finished
+      // checking it (ng-if="!cartItem.checking"), but the traffic-light
+      // figure can land several seconds AFTER the row — so emit a row as
+      // soon as it has a real figure, and settle for "—" only once the row
+      // has sat without one for a while (some articles genuinely have no
+      // stock figure for the CO warehouse).
       const remaining = new Set(articleNums);
+      const firstSeen = new Map<string, number>();
       const start = Date.now();
       const maxWait = 120000;
-      const POLL_MS = 200;
+      const POLL_MS = 400;
+      const SETTLE_MS = 15000;
 
       while (remaining.size > 0 && Date.now() - start < maxWait) {
-        const ready = await page.evaluate((arts: string[]) => {
-          const text = (el: Element | null | undefined) =>
-            (el?.textContent || "").trim().replace(/\s+/g, " ");
+        const states = (await page.evaluate(`(() => {
+          ${ROW_READER_SRC}
+          const arts = ${JSON.stringify([...remaining])};
           const rows = Array.from(
-            document.querySelectorAll(
-              '[ng-repeat^="lineItem in cartItem.availabilityItemList"]'
-            )
+            document.querySelectorAll('[ng-repeat^="lineItem in cartItem.availabilityItemList"]')
           );
-          const out: {
-            articleNum: string;
-            available: string;
-            warehouse: string;
-          }[] = [];
+          const out = [];
           for (const art of arts) {
-            const row = rows.find((r) =>
-              (r.textContent || "").includes(art)
-            );
+            const row = rows.find((r) => (r.textContent || "").includes(art));
             if (!row) continue;
-            const availEl = row.querySelector(".trafficHeight span");
-            if (!availEl) continue;
-            const available = text(availEl);
-            let warehouse = "";
-            for (const d of Array.from(row.querySelectorAll("div"))) {
-              const t = text(d);
-              if (/^[A-Z]{3,5}$/.test(t)) {
-                warehouse = t;
-                break;
-              }
-            }
-            out.push({ articleNum: art, available, warehouse });
+            out.push(Object.assign({ articleNum: art }, __readRow(row)));
           }
           return out;
-        }, [...remaining]);
+        })()`)) as {
+          articleNum: string;
+          available: string;
+          warehouse: string;
+          pvd: number | null;
+        }[];
 
-        if (ready.length) {
-          console.log(
-            `[conti] +${ready.length} availability (${
-              articleNums.length - remaining.size + ready.length
-            }/${articleNums.length})`
-          );
-        }
-
-        for (const r of ready) {
-          if (!remaining.has(r.articleNum)) continue;
-          remaining.delete(r.articleNum);
+        const now = Date.now();
+        let emitted = 0;
+        for (const st of states) {
+          if (!remaining.has(st.articleNum)) continue;
+          if (!firstSeen.has(st.articleNum)) firstSeen.set(st.articleNum, now);
+          const settled = now - (firstSeen.get(st.articleNum) ?? now) > SETTLE_MS;
+          if (!st.available && !settled) continue;
+          remaining.delete(st.articleNum);
+          emitted++;
           emit({
             type: "availability",
-            articleNum: r.articleNum,
-            available: r.available,
-            warehouse: r.warehouse,
+            articleNum: st.articleNum,
+            available: st.available || "—",
+            warehouse: st.warehouse,
+            pvd: st.pvd,
           });
+        }
+
+        if (emitted) {
+          console.log(
+            `[conti] +${emitted} availability (${
+              articleNums.length - remaining.size
+            }/${articleNums.length})`
+          );
         }
 
         if (remaining.size > 0) {
@@ -1046,6 +1104,7 @@ export async function searchAndStream(
           articleNum: art,
           available: "—",
           warehouse: "",
+          pvd: null,
         });
       }
     } catch (err) {

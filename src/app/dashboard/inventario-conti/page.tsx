@@ -10,13 +10,25 @@ import {
   Filter,
 } from 'lucide-react';
 
+// Sale prices: company cost (PVD) plus the commercial margin per category.
+const MARGENES = [
+  { key: 'general', label: 'General', pct: 0.32 },
+  { key: 'flotas', label: 'Flotas', pct: 0.26 },
+  { key: 'dist', label: 'Dist', pct: 0.22 },
+] as const;
+
+const fmtCOP = new Intl.NumberFormat('es-CO', {
+  style: 'currency',
+  currency: 'COP',
+  maximumFractionDigits: 0,
+});
+
 interface Item {
   articleNum: string;
-  brand: string;
   description: string;
-  available: string | null; // null = not fetched yet, "error" = fetch failed
+  available: string | null; // null = still loading, "error" = fetch failed
   warehouse: string;
-  shown: boolean; // whether the row has been clicked / revealed
+  pvd: number | null;
 }
 
 interface DebugInfo {
@@ -29,23 +41,26 @@ interface DebugInfo {
   freeTextSearch?: string;
 }
 
+type StreamEvent =
+  | { type: 'results'; items: { articleNum: string; brand: string; description: string }[]; debug?: DebugInfo }
+  | { type: 'availability'; articleNum: string; available: string; warehouse: string; pvd: number | null }
+  | { type: 'error'; error: string }
+  | { type: 'done' };
+
 export default function InventarioContiPage() {
   const [query, setQuery] = useState('');
   const [items, setItems] = useState<Item[] | null>(null);
   const [searchedQuery, setSearchedQuery] = useState<string>('');
   const [elapsed, setElapsed] = useState<number | null>(null);
   const [loading, setLoading] = useState(false);
+  const [streaming, setStreaming] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [filter, setFilter] = useState('');
   const [debug, setDebug] = useState<DebugInfo | null>(null);
-  const itemsRef = useRef<Item[] | null>(null);
-
-  useEffect(() => {
-    itemsRef.current = items;
-  }, [items]);
+  const runIdRef = useRef(0);
 
   // Warm the Continental browser session as soon as the page loads so the
-  // first search doesn't pay the login penalty.
+  // first search doesn't pay the full login penalty.
   useEffect(() => {
     fetch('/api/conti/warm', { method: 'POST' }).catch(() => {});
   }, []);
@@ -53,58 +68,105 @@ export default function InventarioContiPage() {
   async function run(e: React.FormEvent) {
     e.preventDefault();
     if (!query.trim()) return;
+    const runId = ++runIdRef.current;
     setErr(null);
     setItems(null);
     setElapsed(null);
     setDebug(null);
     setLoading(true);
+    setStreaming(true);
     const t0 = performance.now();
 
+    const handleEvent = (ev: StreamEvent) => {
+      if (runIdRef.current !== runId) return; // stale stream
+      if (ev.type === 'results') {
+        setDebug(ev.debug || null);
+        setSearchedQuery(query);
+        setElapsed(Math.round(performance.now() - t0));
+        setItems(
+          (ev.items || []).map((m) => ({
+            articleNum: m.articleNum,
+            description: m.description,
+            available: null,
+            warehouse: '',
+            pvd: null,
+          }))
+        );
+        setLoading(false);
+      } else if (ev.type === 'availability') {
+        setItems((prev) =>
+          prev
+            ? prev.map((it) =>
+                it.articleNum === ev.articleNum
+                  ? {
+                      ...it,
+                      available: ev.available || '—',
+                      warehouse: ev.warehouse || '',
+                      pvd: ev.pvd ?? null,
+                    }
+                  : it
+              )
+            : prev
+        );
+      } else if (ev.type === 'error') {
+        setErr(ev.error || 'Error desconocido');
+      }
+    };
+
     try {
-      const r = await fetch('/api/conti/lookup', {
+      const r = await fetch('/api/conti/stream', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({ query }),
       });
-      const j = await r.json();
-      if (!r.ok) {
+      if (!r.ok || !r.body) {
+        const j = await r.json().catch(() => ({}));
         setErr(j.error || `HTTP ${r.status}`);
         return;
       }
-      setDebug(j.debug || null);
-      setSearchedQuery(query);
-      setItems(
-        (j.items || []).map((m: { articleNum: string; brand: string; description: string }) => ({
-          articleNum: m.articleNum,
-          brand: m.brand,
-          description: m.description,
-          available: null,
-          warehouse: '',
-          shown: false,
-        }))
-      );
-      setElapsed(Math.round(performance.now() - t0));
+
+      const reader = r.body.getReader();
+      const decoder = new TextDecoder();
+      let buf = '';
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += decoder.decode(value, { stream: true });
+        let idx;
+        while ((idx = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, idx).trim();
+          buf = buf.slice(idx + 1);
+          if (!line) continue;
+          try {
+            handleEvent(JSON.parse(line) as StreamEvent);
+          } catch {}
+        }
+      }
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Conexión perdida');
+      if (runIdRef.current === runId) {
+        setErr(e instanceof Error ? e.message : 'Conexión perdida');
+      }
     } finally {
-      setLoading(false);
+      if (runIdRef.current === runId) {
+        setLoading(false);
+        setStreaming(false);
+        // Anything the stream never resolved becomes retryable.
+        setItems((prev) =>
+          prev
+            ? prev.map((it) => (it.available === null ? { ...it, available: 'error' } : it))
+            : prev
+        );
+      }
     }
   }
 
-  async function reveal(articleNum: string) {
-    const cur = itemsRef.current?.find((x) => x.articleNum === articleNum);
-    if (!cur) return;
-
+  // Per-row retry for availabilities the stream couldn't resolve.
+  async function retry(articleNum: string) {
     setItems((prev) =>
       prev
-        ? prev.map((it) =>
-            it.articleNum === articleNum ? { ...it, shown: true } : it
-          )
+        ? prev.map((it) => (it.articleNum === articleNum ? { ...it, available: null } : it))
         : prev
     );
-
-    if (cur.available !== null && cur.available !== 'error') return;
-
     try {
       const r = await fetch('/api/conti/availability', {
         method: 'POST',
@@ -121,6 +183,7 @@ export default function InventarioContiPage() {
                     ...it,
                     available: j.available || '—',
                     warehouse: j.warehouse || '',
+                    pvd: j.pvd ?? null,
                   }
                 : it
             )
@@ -130,9 +193,7 @@ export default function InventarioContiPage() {
       setItems((prev) =>
         prev
           ? prev.map((it) =>
-              it.articleNum === articleNum
-                ? { ...it, available: 'error', warehouse: '' }
-                : it
+              it.articleNum === articleNum ? { ...it, available: 'error', warehouse: '' } : it
             )
           : prev
       );
@@ -144,25 +205,23 @@ export default function InventarioContiPage() {
     const f = filter.trim().toLowerCase();
     if (!f) return items;
     return items.filter((i) =>
-      [i.articleNum, i.brand, i.description, i.warehouse]
+      [i.articleNum, i.description, i.warehouse]
         .join(' ')
         .toLowerCase()
         .includes(f)
     );
   }, [items, filter]);
 
-  const cachedCount = items
+  const resolvedCount = items
     ? items.filter((i) => i.available !== null && i.available !== 'error').length
     : 0;
-  const pendingShownCount = items
-    ? items.filter((i) => i.shown && i.available === null).length
-    : 0;
+  const pendingCount = items ? items.filter((i) => i.available === null).length : 0;
 
   return (
     <>
       <DashboardNavbar activePage="inventario-conti" />
       <div className="pt-20 min-h-screen bg-gradient-to-b from-gray-50 to-gray-100 py-10 px-4 sm:px-6 lg:px-8 text-black">
-        <div className="max-w-5xl mx-auto">
+        <div className="max-w-6xl mx-auto">
           {/* Header */}
           <div className="flex items-center gap-3 mb-6">
             <div className="w-11 h-11 rounded-xl bg-amber-100 flex items-center justify-center">
@@ -170,7 +229,7 @@ export default function InventarioContiPage() {
             </div>
             <div>
               <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Inventario Continental</h1>
-              <p className="text-sm text-gray-500">Consulta de disponibilidad en ContiLink</p>
+              <p className="text-sm text-gray-500">Consulta de disponibilidad y precios en ContiLink</p>
             </div>
           </div>
 
@@ -188,12 +247,13 @@ export default function InventarioContiPage() {
                 />
               </div>
               <button
-                disabled={loading || !query.trim()}
+                disabled={loading || streaming || !query.trim()}
                 className="inline-flex items-center justify-center gap-2 px-6 py-3 rounded-xl bg-gradient-to-r from-amber-500 to-amber-600 text-white text-sm font-medium shadow-md hover:from-amber-600 hover:to-amber-700 transition-colors disabled:opacity-50"
               >
-                {loading ? (
+                {loading || streaming ? (
                   <>
-                    <RefreshCw size={16} className="animate-spin" /> Buscando…
+                    <RefreshCw size={16} className="animate-spin" />
+                    {loading ? 'Buscando…' : 'Cargando inventario…'}
                   </>
                 ) : (
                   <>
@@ -226,12 +286,12 @@ export default function InventarioContiPage() {
               <div className="flex items-center justify-between mb-3 gap-3 flex-wrap">
                 <h2 className="text-xs uppercase tracking-wide text-gray-500">
                   {items.length} resultado{items.length === 1 ? '' : 's'}
-                  {items.length > 0 && cachedCount > 0 && (
-                    <span className="ml-2 text-gray-400">· {cachedCount} en caché</span>
+                  {resolvedCount > 0 && resolvedCount < items.length && (
+                    <span className="ml-2 text-gray-400">· {resolvedCount} listos</span>
                   )}
-                  {pendingShownCount > 0 && (
+                  {pendingCount > 0 && (
                     <span className="ml-2 text-amber-600 animate-pulse">
-                      cargando {pendingShownCount}
+                      cargando {pendingCount}
                     </span>
                   )}
                   {elapsed != null && (
@@ -277,71 +337,71 @@ haveSearchResults:${String(debug.haveSearchResults ?? false)}`}
                   </div>
                 </div>
               ) : (
-                <div className="rounded-2xl border border-gray-100 overflow-hidden bg-white shadow-sm">
-                  <div className="grid grid-cols-[110px_1fr_130px_80px] sm:grid-cols-[140px_110px_1fr_140px_80px] gap-4 px-4 py-2.5 text-xs uppercase tracking-wide text-gray-500 bg-gray-50 border-b border-gray-200">
-                    <div>Artículo</div>
-                    <div className="hidden sm:block">Marca</div>
-                    <div>Descripción</div>
-                    <div className="text-right">Disponible</div>
-                    <div className="text-right">Bodega</div>
-                  </div>
-                  {(filtered || []).map((it) => {
-                    const cached = it.available !== null && it.available !== 'error';
-                    const errored = it.available === 'error';
-                    const n = parseInt(it.available || '', 10);
-                    const positive = !isNaN(n) && n > 0;
-                    return (
-                      <div
-                        key={it.articleNum}
-                        className="grid grid-cols-[110px_1fr_130px_80px] sm:grid-cols-[140px_110px_1fr_140px_80px] gap-4 px-4 py-3 border-t first:border-t-0 border-gray-100 items-center hover:bg-gray-50/60 transition-colors"
-                      >
-                        <div className="font-mono text-sm text-gray-900">{it.articleNum}</div>
-                        <div className="hidden sm:block text-sm text-gray-600">{it.brand}</div>
-                        <div className="text-sm text-gray-800 break-words">{it.description}</div>
-                        <div className="text-right">
-                          {!it.shown ? (
-                            <button
-                              onClick={() => reveal(it.articleNum)}
-                              className={
-                                'text-xs rounded-xl px-3 py-1.5 border transition-colors font-medium ' +
-                                (cached
-                                  ? 'border-amber-500 bg-amber-50 text-amber-700 hover:bg-amber-100'
-                                  : 'border-gray-300 bg-white text-gray-700 hover:border-amber-500 hover:text-amber-700')
-                              }
-                            >
-                              {cached ? 'Ver' : 'Mostrar'}
-                            </button>
-                          ) : errored ? (
-                            <button
-                              onClick={() => reveal(it.articleNum)}
-                              className="text-xs rounded-xl px-3 py-1.5 border border-red-300 bg-red-50 text-red-700 hover:bg-red-100"
-                            >
-                              reintentar
-                            </button>
-                          ) : !cached ? (
-                            <span className="inline-flex items-center gap-2 text-xs text-gray-500">
+                <div className="rounded-2xl border border-gray-100 bg-white shadow-sm overflow-x-auto">
+                  <div className="min-w-[880px]">
+                    <div className="grid grid-cols-[120px_1fr_90px_110px_110px_110px_70px] gap-3 px-4 py-2.5 text-xs uppercase tracking-wide text-gray-500 bg-gray-50 border-b border-gray-200">
+                      <div>Artículo</div>
+                      <div>Descripción</div>
+                      <div className="text-right">Disponible</div>
+                      <div className="text-right">General</div>
+                      <div className="text-right">Flotas</div>
+                      <div className="text-right">Dist</div>
+                      <div className="text-right">Bodega</div>
+                    </div>
+                    {(filtered || []).map((it) => {
+                      const resolved = it.available !== null && it.available !== 'error';
+                      const errored = it.available === 'error';
+                      const pending = it.available === null;
+                      const n = parseInt(it.available || '', 10);
+                      const positive = !isNaN(n) && n > 0;
+                      return (
+                        <div
+                          key={it.articleNum}
+                          className="grid grid-cols-[120px_1fr_90px_110px_110px_110px_70px] gap-3 px-4 py-3 border-t first:border-t-0 border-gray-100 items-center hover:bg-gray-50/60 transition-colors"
+                        >
+                          <div className="font-mono text-sm text-gray-900">{it.articleNum}</div>
+                          <div className="text-sm text-gray-800 break-words">{it.description}</div>
+                          <div className="text-right">
+                            {errored ? (
+                              <button
+                                onClick={() => retry(it.articleNum)}
+                                className="text-xs rounded-xl px-3 py-1.5 border border-red-300 bg-red-50 text-red-700 hover:bg-red-100"
+                              >
+                                reintentar
+                              </button>
+                            ) : pending ? (
                               <span className="inline-block h-3 w-8 rounded bg-gray-200 animate-pulse" />
-                              cargando
-                            </span>
-                          ) : (
-                            <span
-                              className={
-                                'font-mono text-base ' +
-                                (positive
-                                  ? 'text-amber-700 font-semibold'
-                                  : 'text-gray-400')
-                              }
-                            >
-                              {it.available || '—'}
-                            </span>
-                          )}
+                            ) : (
+                              <span
+                                className={
+                                  'font-mono text-base ' +
+                                  (positive ? 'text-amber-700 font-semibold' : 'text-gray-400')
+                                }
+                              >
+                                {it.available || '—'}
+                              </span>
+                            )}
+                          </div>
+                          {MARGENES.map((m) => (
+                            <div key={m.key} className="text-right">
+                              {pending ? (
+                                <span className="inline-block h-3 w-14 rounded bg-gray-200 animate-pulse" />
+                              ) : resolved && it.pvd ? (
+                                <span className="font-mono text-sm text-gray-900">
+                                  {fmtCOP.format(Math.round(it.pvd * (1 + m.pct)))}
+                                </span>
+                              ) : (
+                                <span className="text-gray-300 text-sm">—</span>
+                              )}
+                            </div>
+                          ))}
+                          <div className="text-right text-xs text-gray-500">
+                            {resolved ? it.warehouse || '—' : ''}
+                          </div>
                         </div>
-                        <div className="text-right text-xs text-gray-500">
-                          {it.shown && cached ? it.warehouse || '—' : ''}
-                        </div>
-                      </div>
-                    );
-                  })}
+                      );
+                    })}
+                  </div>
                 </div>
               )}
             </div>
