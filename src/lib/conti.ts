@@ -717,6 +717,86 @@ async function articleInDom(page: Page, articleNum: string): Promise<boolean> {
   }, articleNum);
 }
 
+// Check ONE article that is already rendered in the search results: clear
+// the cart, set qty=1 on exactly that row (zeroing any leftover quantities
+// so nothing else rides along), add to cart, and poll its cart line item.
+// This is the proven fast path — ContiLink resolves a single-item cart in a
+// few seconds, the same speed a person sees in the portal.
+async function readOneFromResults(
+  page: Page,
+  articleNum: string
+): Promise<{ available: string; warehouse: string; pvd: number | null }> {
+  await clearCart(page);
+  const setOk = await page.evaluate((art) => {
+    const w = window as any;
+    const rows = document.querySelectorAll(".searchEntry");
+    let ok = false;
+    let anyScope: any = null;
+    for (const row of Array.from(rows)) {
+      const cells = row.querySelectorAll(":scope > div");
+      const isTarget = (cells[0]?.textContent || "").trim() === art;
+      const input = row.querySelector(
+        'input[ng-model="searchEntry.quantity"]'
+      ) as HTMLInputElement | null;
+      if (!input) continue;
+      if (w.angular) {
+        const scope = w.angular.element(input).scope();
+        if (scope?.searchEntry) {
+          scope.searchEntry.quantity = isTarget ? "1" : "";
+          if (!anyScope) anyScope = scope;
+          if (isTarget) ok = true;
+          continue;
+        }
+      }
+      input.value = isTarget ? "1" : "";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      if (isTarget) ok = true;
+    }
+    if (anyScope) {
+      try {
+        anyScope.$apply();
+      } catch {}
+    }
+    return ok;
+  }, articleNum);
+  if (!setOk) throw new Error(`Could not set qty on article ${articleNum}`);
+
+  await dismissConsent(page).catch(() => {});
+  await page.click('button[ng-click="searchVM.addSearchResultsToCart()"]');
+
+  // Poll the cart line item. The row renders once ContiLink finished
+  // checking (ng-if="!cartItem.checking"); the traffic-light figure can land
+  // a few seconds after the row, and some articles never get one — settle
+  // for "—" once the row has sat without a figure for a while.
+  const start = Date.now();
+  const MAX_WAIT = 30000;
+  const SETTLE_MS = 10000;
+  let rowSeenAt = 0;
+  for (;;) {
+    const states = await page.evaluate(readCartRowsInPage, [articleNum]);
+    const state = states[0];
+
+    if (state) {
+      if (state.available) {
+        return {
+          available: state.available,
+          warehouse: state.warehouse,
+          pvd: state.pvd,
+        };
+      }
+      if (!rowSeenAt) rowSeenAt = Date.now();
+      if (Date.now() - rowSeenAt > SETTLE_MS) {
+        // Row stable without a figure → ContiLink has none for this article.
+        return { available: "—", warehouse: state.warehouse, pvd: state.pvd };
+      }
+    }
+    if (Date.now() - start > MAX_WAIT) {
+      throw new Error(`Article ${articleNum}: cart row never appeared`);
+    }
+    await new Promise((r) => setTimeout(r, 400));
+  }
+}
+
 async function fetchOneAvailability(
   page: Page,
   articleNum: string,
@@ -724,8 +804,8 @@ async function fetchOneAvailability(
 ): Promise<OneAvailability> {
   await ensureLoggedIn(page);
 
-  // 1. Make sure the article row is on screen. If a previous availability
-  //    call left us with the original search results, reuse them.
+  // Make sure the article row is on screen. If a previous availability
+  // call left us with the original search results, reuse them.
   let inDom = await articleInDom(page, articleNum);
   if (!inDom) {
     await runSearch(page, articleNum);
@@ -737,75 +817,8 @@ async function fetchOneAvailability(
   }
   if (!inDom) throw new Error(`Article ${articleNum} not found`);
 
-  // 2. Clear cart and put qty=1 on this article only.
-  await clearCart(page);
-  const setOk = await page.evaluate((art) => {
-    const w = window as any;
-    const rows = document.querySelectorAll(".searchEntry");
-    for (const row of Array.from(rows)) {
-      const cells = row.querySelectorAll(":scope > div");
-      if ((cells[0]?.textContent || "").trim() !== art) continue;
-      const input = row.querySelector(
-        'input[ng-model="searchEntry.quantity"]'
-      ) as HTMLInputElement | null;
-      if (!input) return false;
-      if (w.angular) {
-        const scope = w.angular.element(input).scope();
-        if (scope?.searchEntry) {
-          scope.searchEntry.quantity = "1";
-          try {
-            scope.$apply();
-          } catch {}
-          return true;
-        }
-      }
-      input.value = "1";
-      input.dispatchEvent(new Event("input", { bubbles: true }));
-      return true;
-    }
-    return false;
-  }, articleNum);
-  if (!setOk) throw new Error("Could not set qty on article row");
-
-  // 3. Add to cart.
-  await dismissConsent(page).catch(() => {});
-  await page.click('button[ng-click="searchVM.addSearchResultsToCart()"]');
-
-  // 4. Poll the cart line item. The row itself renders once ContiLink
-  // finished checking (ng-if="!cartItem.checking"), but the traffic-light
-  // number can land several seconds AFTER the row — so keep polling for a
-  // real number, and only settle for "—" once the row has sat there without
-  // one for a while (some articles genuinely have no stock figure for the
-  // CO warehouse). Bounded so a wedged page fails here, resets, and frees
-  // the queue lock instead of blocking later requests.
-  const start = Date.now();
-  const MAX_WAIT = 40000;
-  const SETTLE_MS = 15000;
-  let rowSeenAt = 0;
-  for (;;) {
-    const states = await page.evaluate(readCartRowsInPage, [articleNum]);
-    const state = states[0];
-
-    if (state) {
-      if (state.available) {
-        return {
-          articleNum,
-          available: state.available,
-          warehouse: state.warehouse,
-          pvd: state.pvd,
-        };
-      }
-      if (!rowSeenAt) rowSeenAt = Date.now();
-      if (Date.now() - rowSeenAt > SETTLE_MS) {
-        // Row stable without a figure → ContiLink has none for this article.
-        return { articleNum, available: "—", warehouse: state.warehouse, pvd: state.pvd };
-      }
-    }
-    if (Date.now() - start > MAX_WAIT) {
-      throw new Error(`Article ${articleNum}: cart row never appeared`);
-    }
-    await new Promise((r) => setTimeout(r, 500));
-  }
+  const r = await readOneFromResults(page, articleNum);
+  return { articleNum, ...r };
 }
 
 export async function getOneAvailability(
@@ -991,116 +1004,62 @@ export async function searchAndStream(
         return;
       }
 
-      const articleNums = meta.map((m) => m.articleNum);
-
-      // Set qty=1 on every rendered row whose article matches.
-      const setOk = await page.evaluate((arts) => {
-        const w = window as any;
-        const rows = Array.from(document.querySelectorAll(".searchEntry"));
-        let any = false;
-        let firstScope: any = null;
-        for (const row of rows) {
-          const cells = row.querySelectorAll(":scope > div");
-          const articleNum = (cells[0]?.textContent || "").trim();
-          if (!arts.includes(articleNum)) continue;
-          const input = row.querySelector(
-            'input[ng-model="searchEntry.quantity"]'
-          ) as HTMLInputElement | null;
-          if (!input) continue;
-          if (w.angular) {
-            const scope = w.angular.element(input).scope();
-            if (scope?.searchEntry) {
-              scope.searchEntry.quantity = "1";
-              if (!firstScope) firstScope = scope;
-              any = true;
-              continue;
-            }
-          }
-          input.value = "1";
-          input.dispatchEvent(new Event("input", { bubbles: true }));
-          input.dispatchEvent(new Event("change", { bubbles: true }));
-          any = true;
-        }
-        if (firstScope) {
-          try {
-            firstScope.$apply();
-          } catch {}
-        }
-        return any;
-      }, articleNums);
-
-      if (!setOk) {
-        const count = await page.$$eval(".searchEntry", (rs) => rs.length);
-        for (let i = 0; i < count; i++) {
-          const sel = `#searchQty-${i}`;
-          await page.click(sel, { clickCount: 3 }).catch(() => {});
-          await page.keyboard.press("Backspace").catch(() => {});
-          await page.type(sel, "1").catch(() => {});
-        }
-      }
-
-      await dismissConsent(page).catch(() => {});
-      await page.click('button[ng-click="searchVM.addSearchResultsToCart()"]');
-
-      // Poll cart rows directly. A row renders once ContiLink finished
-      // checking it (ng-if="!cartItem.checking"), but the traffic-light
-      // figure can land several seconds AFTER the row — so emit a row as
-      // soon as it has a real figure, and settle for "—" only once the row
-      // has sat without one for a while (some articles genuinely have no
-      // stock figure for the CO warehouse).
-      const remaining = new Set(articleNums);
-      const firstSeen = new Map<string, number>();
-      const start = Date.now();
-      const maxWait = 120000;
-      const POLL_MS = 400;
-      const SETTLE_MS = 15000;
-
-      while (remaining.size > 0 && Date.now() - start < maxWait) {
-        const states = await page.evaluate(readCartRowsInPage, [...remaining]);
-
-        const now = Date.now();
-        let emitted = 0;
-        for (const st of states) {
-          if (!remaining.has(st.articleNum)) continue;
-          if (!firstSeen.has(st.articleNum)) firstSeen.set(st.articleNum, now);
-          const settled = now - (firstSeen.get(st.articleNum) ?? now) > SETTLE_MS;
-          if (!st.available && !settled) continue;
-          remaining.delete(st.articleNum);
-          emitted++;
+      // Check articles ONE at a time, exactly like the proven single-article
+      // flow: ContiLink resolves a single-item cart in a few seconds, while
+      // dumping the whole result set into the cart at once leaves the cart
+      // "checking" longer than any reasonable budget (the all-"—" failure
+      // mode). Each value is emitted the moment it's read, so the first
+      // rows reach the UI within seconds of the results.
+      let p = page;
+      const deadline = Date.now() + 240000; // headroom under maxDuration=300
+      let done = 0;
+      for (const m of meta) {
+        if (Date.now() > deadline) {
+          // Out of budget — mark the rest retryable instead of hanging.
           emit({
             type: "availability",
-            articleNum: st.articleNum,
-            available: st.available || "—",
-            warehouse: st.warehouse,
-            pvd: st.pvd,
+            articleNum: m.articleNum,
+            available: "error",
+            warehouse: "",
+            pvd: null,
           });
+          continue;
         }
-
-        if (emitted) {
+        try {
+          const r = await readOneFromResults(p, m.articleNum);
+          done++;
           console.log(
-            `[conti] +${emitted} availability (${
-              articleNums.length - remaining.size
-            }/${articleNums.length})`
+            `[conti] +1 availability ${m.articleNum} (${done}/${meta.length})`
           );
+          emit({
+            type: "availability",
+            articleNum: m.articleNum,
+            available: r.available,
+            warehouse: r.warehouse,
+            pvd: r.pvd,
+          });
+        } catch (err) {
+          console.error(`[conti] stream item ${m.articleNum} failed:`, err);
+          emit({
+            type: "availability",
+            articleNum: m.articleNum,
+            available: "error",
+            warehouse: "",
+            pvd: null,
+          });
+          // Reset the page and restore the search so the remaining articles
+          // can still resolve.
+          try {
+            await captureError(p, "stream-item", err);
+            p = await getPage();
+            await ensureLoggedIn(p);
+            await runSearch(p, query);
+          } catch {}
         }
-
-        if (remaining.size > 0) {
-          await new Promise((r) => setTimeout(r, POLL_MS));
-        }
-      }
-
-      // Anything still unresolved → emit "—" so the UI can stop spinning.
-      for (const art of remaining) {
-        emit({
-          type: "availability",
-          articleNum: art,
-          available: "—",
-          warehouse: "",
-          pvd: null,
-        });
       }
     } catch (err) {
-      await captureError(page, "lookup", err);
+      const p = global._contiPage;
+      if (p && !p.isClosed()) await captureError(p, "lookup", err);
       const msg = err instanceof Error ? err.message : String(err);
       emit({ type: "error", error: msg });
     }
