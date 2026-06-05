@@ -3,7 +3,7 @@ import { auth } from '@/lib/auth';
 import { getOneAvailability, ensureWarm } from '@/lib/conti';
 
 export const runtime = 'nodejs';
-export const maxDuration = 90;
+export const maxDuration = 120;
 
 // Simple in-memory cache (per server instance)
 const cache = new Map<string, { data: unknown; ts: number }>();
@@ -61,13 +61,13 @@ export async function POST(req: NextRequest) {
     // Warm browser (avoids cold start penalties)
     await ensureWarm().catch(() => {});
 
-    // Longer than every internal puppeteer timeout on purpose: the scrape
-    // must fail (and release its lock + reset the page) before this fires,
-    // otherwise it keeps running in the background and later requests queue
-    // behind a dead one.
+    // Longer than every internal puppeteer timeout on purpose — including
+    // the automatic retry attempt: the scrape must fail (and release its
+    // lock + reset the page) before this fires, otherwise it keeps running
+    // in the background and later requests queue behind a dead one.
     const result = await withTimeout(
       getOneAvailability(articleNum, query),
-      80000
+      110000
     );
 
     setCache(cacheKey, result);

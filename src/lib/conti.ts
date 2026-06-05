@@ -635,133 +635,131 @@ async function articleInDom(page: Page, articleNum: string): Promise<boolean> {
   }, articleNum);
 }
 
+async function fetchOneAvailability(
+  page: Page,
+  articleNum: string,
+  originalQuery?: string
+): Promise<OneAvailability> {
+  await ensureLoggedIn(page);
+
+  // 1. Make sure the article row is on screen. If a previous availability
+  //    call left us with the original search results, reuse them.
+  let inDom = await articleInDom(page, articleNum);
+  if (!inDom) {
+    await runSearch(page, articleNum);
+    inDom = await articleInDom(page, articleNum);
+    if (!inDom && originalQuery) {
+      await runSearch(page, originalQuery);
+      inDom = await articleInDom(page, articleNum);
+    }
+  }
+  if (!inDom) throw new Error(`Article ${articleNum} not found`);
+
+  // 2. Clear cart and put qty=1 on this article only.
+  await clearCart(page);
+  const setOk = await page.evaluate((art) => {
+    const w = window as any;
+    const rows = document.querySelectorAll(".searchEntry");
+    for (const row of Array.from(rows)) {
+      const cells = row.querySelectorAll(":scope > div");
+      if ((cells[0]?.textContent || "").trim() !== art) continue;
+      const input = row.querySelector(
+        'input[ng-model="searchEntry.quantity"]'
+      ) as HTMLInputElement | null;
+      if (!input) return false;
+      if (w.angular) {
+        const scope = w.angular.element(input).scope();
+        if (scope?.searchEntry) {
+          scope.searchEntry.quantity = "1";
+          try {
+            scope.$apply();
+          } catch {}
+          return true;
+        }
+      }
+      input.value = "1";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      return true;
+    }
+    return false;
+  }, articleNum);
+  if (!setOk) throw new Error("Could not set qty on article row");
+
+  // 3. Add to cart.
+  await dismissConsent(page).catch(() => {});
+  await page.click('button[ng-click="searchVM.addSearchResultsToCart()"]');
+
+  // 4. Poll the cart line item. The row itself renders once ContiLink
+  // finished checking (ng-if="!cartItem.checking"), but the traffic-light
+  // number can land several seconds AFTER the row — so keep polling for a
+  // real number, and only settle for "—" once the row has sat there without
+  // one for a while (some articles genuinely have no stock figure for the
+  // CO warehouse). Bounded so a wedged page fails here, resets, and frees
+  // the queue lock instead of blocking later requests.
+  const start = Date.now();
+  const MAX_WAIT = 40000;
+  const SETTLE_MS = 15000;
+  let rowSeenAt = 0;
+  for (;;) {
+    const state = await page.evaluate((art) => {
+      const text = (el: Element | null | undefined) =>
+        (el?.textContent || "").trim().replace(/\s+/g, " ");
+      const rows = Array.from(
+        document.querySelectorAll(
+          '[ng-repeat^="lineItem in cartItem.availabilityItemList"]'
+        )
+      );
+      const row = rows.find((r) => (r.textContent || "").includes(art));
+      if (!row) return { found: false as const, available: "", warehouse: "" };
+      const availEl = row.querySelector(".trafficHeight span");
+      const available = availEl ? text(availEl) : "";
+      let warehouse = "";
+      for (const d of Array.from(row.querySelectorAll("div"))) {
+        const t = text(d);
+        if (/^[A-Z]{3,5}$/.test(t)) {
+          warehouse = t;
+          break;
+        }
+      }
+      return { found: true as const, available, warehouse };
+    }, articleNum);
+
+    if (state.found) {
+      if (state.available) {
+        return { articleNum, available: state.available, warehouse: state.warehouse };
+      }
+      if (!rowSeenAt) rowSeenAt = Date.now();
+      if (Date.now() - rowSeenAt > SETTLE_MS) {
+        // Row stable without a figure → ContiLink has none for this article.
+        return { articleNum, available: "—", warehouse: state.warehouse };
+      }
+    }
+    if (Date.now() - start > MAX_WAIT) {
+      throw new Error(`Article ${articleNum}: cart row never appeared`);
+    }
+    await new Promise((r) => setTimeout(r, 500));
+  }
+}
+
 export async function getOneAvailability(
   articleNum: string,
   originalQuery?: string
 ): Promise<OneAvailability> {
   return withLock(async () => {
-    const page = await getPage();
-    try {
-      await ensureLoggedIn(page);
-
-      // 1. Make sure the article row is on screen. If a previous availability
-      //    call left us with the original search results, reuse them.
-      let inDom = await articleInDom(page, articleNum);
-      if (!inDom) {
-        await runSearch(page, articleNum);
-        inDom = await articleInDom(page, articleNum);
-        if (!inDom && originalQuery) {
-          await runSearch(page, originalQuery);
-          inDom = await articleInDom(page, articleNum);
-        }
+    const t0 = Date.now();
+    for (let attempt = 1; ; attempt++) {
+      const page = await getPage();
+      try {
+        return await fetchOneAvailability(page, articleNum, originalQuery);
+      } catch (err) {
+        await captureError(page, "availability", err);
+        // One automatic retry on a fresh page — a wedged Angular page is the
+        // most common transient failure, and captureError just reset it.
+        // Skip the retry if we already burned a long time so the user isn't
+        // left staring at a spinner past the route timeout.
+        if (attempt >= 2 || Date.now() - t0 > 60000) throw err;
+        console.log(`[conti] availability retry for ${articleNum}`);
       }
-      if (!inDom) throw new Error(`Article ${articleNum} not found`);
-
-      // 2. Clear cart and put qty=1 on this article only.
-      await clearCart(page);
-      const setOk = await page.evaluate((art) => {
-        const w = window as any;
-        const rows = document.querySelectorAll(".searchEntry");
-        for (const row of Array.from(rows)) {
-          const cells = row.querySelectorAll(":scope > div");
-          if ((cells[0]?.textContent || "").trim() !== art) continue;
-          const input = row.querySelector(
-            'input[ng-model="searchEntry.quantity"]'
-          ) as HTMLInputElement | null;
-          if (!input) return false;
-          if (w.angular) {
-            const scope = w.angular.element(input).scope();
-            if (scope?.searchEntry) {
-              scope.searchEntry.quantity = "1";
-              try {
-                scope.$apply();
-              } catch {}
-              return true;
-            }
-          }
-          input.value = "1";
-          input.dispatchEvent(new Event("input", { bubbles: true }));
-          return true;
-        }
-        return false;
-      }, articleNum);
-      if (!setOk) throw new Error("Could not set qty on article row");
-
-      // 3. Add to cart.
-      await dismissConsent(page).catch(() => {});
-      await page.click('button[ng-click="searchVM.addSearchResultsToCart()"]');
-
-      // 4. Wait for the cart line item to render. It's gated behind
-      // ng-if="!cartItem.checking", so its mere presence means ContiLink
-      // finished checking this article. Keep this shorter than the HTTP
-      // route's timeout wrapper: if it can't resolve, we want to fail HERE
-      // so captureError resets the page and the lock is released.
-      await page.waitForFunction(
-        (art) => {
-          const rows = document.querySelectorAll(
-            '[ng-repeat^="lineItem in cartItem.availabilityItemList"]'
-          );
-          for (const r of Array.from(rows)) {
-            if ((r.textContent || "").includes(art)) return true;
-          }
-          return false;
-        },
-        { timeout: 30000 },
-        articleNum
-      );
-
-      // 5. The traffic-light number is OPTIONAL: some articles (no stock
-      // data for the CO warehouse, discontinued, etc.) never render one.
-      // Give it a few seconds, then read whatever is there — "—" is a valid
-      // answer, not an error. Waiting the full timeout for an element that
-      // will never exist is what made these rows "fail" after minutes.
-      await page
-        .waitForFunction(
-          (art) => {
-            const rows = document.querySelectorAll(
-              '[ng-repeat^="lineItem in cartItem.availabilityItemList"]'
-            );
-            for (const r of Array.from(rows)) {
-              if (!(r.textContent || "").includes(art)) continue;
-              if (r.querySelector(".trafficHeight span")) return true;
-            }
-            return false;
-          },
-          { timeout: 8000 },
-          articleNum
-        )
-        .catch(() => {});
-
-      const data = await page.evaluate((art) => {
-        const text = (el: Element | null | undefined) =>
-          (el?.textContent || "").trim().replace(/\s+/g, " ");
-        const rows = Array.from(
-          document.querySelectorAll(
-            '[ng-repeat^="lineItem in cartItem.availabilityItemList"]'
-          )
-        );
-        const row = rows.find((r) =>
-          (r.textContent || "").includes(art)
-        );
-        if (!row) return null;
-        const availEl = row.querySelector(".trafficHeight span");
-        const available = availEl ? text(availEl) : "—";
-        let warehouse = "";
-        for (const d of Array.from(row.querySelectorAll("div"))) {
-          const t = text(d);
-          if (/^[A-Z]{3,5}$/.test(t)) {
-            warehouse = t;
-            break;
-          }
-        }
-        return { available, warehouse };
-      }, articleNum);
-
-      if (!data) throw new Error("Could not read cart row");
-      return { articleNum, ...data };
-    } catch (err) {
-      await captureError(page, "availability", err);
-      throw err;
     }
   });
 }
