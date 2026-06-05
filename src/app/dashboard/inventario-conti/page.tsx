@@ -154,26 +154,28 @@ export default function InventarioContiPage() {
     } finally {
       if (runIdRef.current === runId) {
         setLoading(false);
-        // Stream over — automatically finish whatever it didn't resolve
-        // (function ran out of budget, transient failures, dropped
-        // connection) one article at a time before giving up on any row.
-        const leftovers = (itemsRef.current || [])
-          .filter((it) => it.available === null || it.available === 'error')
-          .map((it) => it.articleNum);
-        for (const articleNum of leftovers) {
-          if (runIdRef.current !== runId) break;
-          // Sequential on purpose — the scraper serializes on one browser page.
-          await retry(articleNum);
+        // Stream over — keep resolving whatever is left, pass after pass,
+        // until EVERY row has a value. Transient scraper failures
+        // ("Execution context was destroyed", timeouts, cold lambdas) heal
+        // on a later pass; the user never has to click anything.
+        const pendingArts = () =>
+          (itemsRef.current || [])
+            .filter((it) => it.available === null || it.available === 'error')
+            .map((it) => it.articleNum);
+        for (let pass = 1; runIdRef.current === runId; pass++) {
+          const left = pendingArts();
+          if (left.length === 0) break;
+          for (const articleNum of left) {
+            if (runIdRef.current !== runId) break;
+            // Sequential on purpose — the scraper serializes on one browser page.
+            await retry(articleNum);
+          }
+          if (runIdRef.current !== runId || pendingArts().length === 0) break;
+          // Back off a little more on each full pass so we don't hammer
+          // the scraper while ContiLink is having a moment.
+          await new Promise((r) => setTimeout(r, Math.min(15000, 2000 * pass)));
         }
-        if (runIdRef.current === runId) {
-          setStreaming(false);
-          // Anything STILL unresolved becomes manually retryable.
-          setItems((prev) =>
-            prev
-              ? prev.map((it) => (it.available === null ? { ...it, available: 'error' } : it))
-              : prev
-          );
-        }
+        if (runIdRef.current === runId) setStreaming(false);
       }
     }
   }
@@ -233,7 +235,9 @@ export default function InventarioContiPage() {
   const resolvedCount = items
     ? items.filter((i) => i.available !== null && i.available !== 'error').length
     : 0;
-  const pendingCount = items ? items.filter((i) => i.available === null).length : 0;
+  const pendingCount = items
+    ? items.filter((i) => i.available === null || i.available === 'error').length
+    : 0;
 
   return (
     <>
@@ -368,8 +372,7 @@ haveSearchResults:${String(debug.haveSearchResults ?? false)}`}
                     </div>
                     {(filtered || []).map((it) => {
                       const resolved = it.available !== null && it.available !== 'error';
-                      const errored = it.available === 'error';
-                      const pending = it.available === null;
+                      const pending = !resolved; // null or transient 'error' — keeps retrying
                       const n = parseInt(it.available || '', 10);
                       const positive = !isNaN(n) && n > 0;
                       return (
@@ -380,14 +383,7 @@ haveSearchResults:${String(debug.haveSearchResults ?? false)}`}
                           <div className="font-mono text-sm text-gray-900">{it.articleNum}</div>
                           <div className="text-sm text-gray-800 break-words">{it.description}</div>
                           <div className="text-right">
-                            {errored ? (
-                              <button
-                                onClick={() => retry(it.articleNum)}
-                                className="text-xs rounded-xl px-3 py-1.5 border border-red-300 bg-red-50 text-red-700 hover:bg-red-100"
-                              >
-                                reintentar
-                              </button>
-                            ) : pending ? (
+                            {pending ? (
                               <span className="inline-block h-3 w-8 rounded bg-gray-200 animate-pulse" />
                             ) : (
                               <span
