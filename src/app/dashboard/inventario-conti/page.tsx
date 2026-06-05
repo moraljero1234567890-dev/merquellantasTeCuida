@@ -10,8 +10,9 @@ import {
   Filter,
 } from 'lucide-react';
 
-// Sale prices from the company cost (PVD): true commercial margin, i.e.
-// precio = PVD / (1 - margen), NOT a simple markup on cost.
+// Sale prices from the company cost (PVD): true commercial margin plus IVA,
+// i.e. precio = PVD / (1 - margen) * 1.19 — NOT a simple markup on cost.
+const IVA = 1.19;
 const MARGENES = [
   { key: 'general', label: 'General', pct: 0.32 },
   { key: 'flotas', label: 'Flotas', pct: 0.26 },
@@ -403,7 +404,7 @@ haveSearchResults:${String(debug.haveSearchResults ?? false)}`}
                                 <span className="inline-block h-3 w-14 rounded bg-gray-200 animate-pulse" />
                               ) : resolved && it.pvd ? (
                                 <span className="font-mono text-sm text-gray-900">
-                                  {fmtCOP.format(Math.round(it.pvd / (1 - m.pct)))}
+                                  {fmtCOP.format(Math.round((it.pvd / (1 - m.pct)) * IVA))}
                                 </span>
                               ) : (
                                 <span className="text-gray-300 text-sm">—</span>
