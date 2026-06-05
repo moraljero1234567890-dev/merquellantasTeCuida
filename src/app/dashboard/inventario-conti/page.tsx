@@ -58,6 +58,11 @@ export default function InventarioContiPage() {
   const [filter, setFilter] = useState('');
   const [debug, setDebug] = useState<DebugInfo | null>(null);
   const runIdRef = useRef(0);
+  const itemsRef = useRef<Item[] | null>(null);
+
+  useEffect(() => {
+    itemsRef.current = items;
+  }, [items]);
 
   // Warm the Continental browser session as soon as the page loads so the
   // first search doesn't pay the full login penalty.
@@ -149,13 +154,26 @@ export default function InventarioContiPage() {
     } finally {
       if (runIdRef.current === runId) {
         setLoading(false);
-        setStreaming(false);
-        // Anything the stream never resolved becomes retryable.
-        setItems((prev) =>
-          prev
-            ? prev.map((it) => (it.available === null ? { ...it, available: 'error' } : it))
-            : prev
-        );
+        // Stream over — automatically finish whatever it didn't resolve
+        // (function ran out of budget, transient failures, dropped
+        // connection) one article at a time before giving up on any row.
+        const leftovers = (itemsRef.current || [])
+          .filter((it) => it.available === null || it.available === 'error')
+          .map((it) => it.articleNum);
+        for (const articleNum of leftovers) {
+          if (runIdRef.current !== runId) break;
+          // Sequential on purpose — the scraper serializes on one browser page.
+          await retry(articleNum);
+        }
+        if (runIdRef.current === runId) {
+          setStreaming(false);
+          // Anything STILL unresolved becomes manually retryable.
+          setItems((prev) =>
+            prev
+              ? prev.map((it) => (it.available === null ? { ...it, available: 'error' } : it))
+              : prev
+          );
+        }
       }
     }
   }

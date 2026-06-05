@@ -286,14 +286,22 @@ export async function ensureWarm(): Promise<{ warmed: boolean }> {
 }
 
 async function clearCart(page: Page) {
-  await page
-    .evaluate(() => {
-      document
-        .querySelectorAll(".glyphicon-trash.quickMinus")
-        .forEach((t) => (t as HTMLElement).click());
-    })
-    .catch(() => {});
-  await new Promise((r) => setTimeout(r, 300));
+  // VERIFY the cart actually emptied — a missed trash click leaves items
+  // behind, the cart re-checks a growing list on every add, and later
+  // articles in a streaming run time out one after another.
+  for (let i = 0; i < 12; i++) {
+    const left = await page
+      .evaluate(() => {
+        const trashes = document.querySelectorAll(
+          ".glyphicon-trash.quickMinus"
+        );
+        trashes.forEach((t) => (t as HTMLElement).click());
+        return trashes.length;
+      })
+      .catch(() => 0);
+    if (left === 0) return;
+    await new Promise((r) => setTimeout(r, 350));
+  }
 }
 
 interface SearchVMSnapshot {
