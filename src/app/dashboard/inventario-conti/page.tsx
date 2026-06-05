@@ -17,8 +17,8 @@ import {
 const IVA = 1.19;
 const MARGENES = [
   { key: 'general', label: 'General', pct: 0.32, pctDecimal: 0.26 },
-  { key: 'flotas', label: 'Flotas', pct: 0.26, pctDecimal: 0.2 },
-  { key: 'dist', label: 'Dist', pct: 0.22, pctDecimal: 0.15 },
+  { key: 'flotas', label: 'Flotas', pct: 0.26, pctDecimal: 0.22 },
+  { key: 'dist', label: 'Dist', pct: 0.22, pctDecimal: 0.17 },
 ] as const;
 
 // A size "ending in .5" (17.5 / 19.5 / 22.5 rims and the like).
