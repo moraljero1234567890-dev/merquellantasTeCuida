@@ -111,26 +111,56 @@ export function isGroupStageComplete(
   });
 }
 
-const R32_TEMPLATE: Array<
-  | { home: { kind: "W" | "R"; group: string }; away: { kind: "W" | "R"; group: string } }
-  | { home: { kind: "W"; group: string }; away: { kind: "T"; rank: number } }
-> = [
-  { home: { kind: "W", group: "A" }, away: { kind: "T", rank: 1 } },
-  { home: { kind: "W", group: "B" }, away: { kind: "T", rank: 2 } },
-  { home: { kind: "W", group: "C" }, away: { kind: "T", rank: 3 } },
-  { home: { kind: "W", group: "D" }, away: { kind: "T", rank: 4 } },
-  { home: { kind: "W", group: "E" }, away: { kind: "T", rank: 5 } },
-  { home: { kind: "W", group: "F" }, away: { kind: "T", rank: 6 } },
-  { home: { kind: "W", group: "G" }, away: { kind: "T", rank: 7 } },
-  { home: { kind: "W", group: "H" }, away: { kind: "T", rank: 8 } },
-  { home: { kind: "W", group: "I" }, away: { kind: "R", group: "L" } },
-  { home: { kind: "W", group: "J" }, away: { kind: "R", group: "K" } },
-  { home: { kind: "W", group: "K" }, away: { kind: "R", group: "J" } },
-  { home: { kind: "W", group: "L" }, away: { kind: "R", group: "I" } },
-  { home: { kind: "R", group: "A" }, away: { kind: "R", group: "D" } },
-  { home: { kind: "R", group: "B" }, away: { kind: "R", group: "E" } },
-  { home: { kind: "R", group: "C" }, away: { kind: "R", group: "F" } },
-  { home: { kind: "R", group: "G" }, away: { kind: "R", group: "H" } },
+// Official 2026 FIFA World Cup Round of 32 bracket (Annex C of the competition
+// regulations). 12 groups (A-L): both group winners and runners-up qualify,
+// plus the 8 best third-placed teams. Each third-place slot can only be filled
+// by a third-placed team from a fixed set of 5 groups, and which exact group
+// lands in each slot depends on which 8 groups produce the best thirds.
+//
+// The 16 matches below are listed in BRACKET DISPLAY ORDER (top-to-bottom of the
+// bracket tree), NOT in FIFA match-number order. This is deliberate: with this
+// ordering the Round of 16 is simply winners of R32-(2i-1) vs R32-(2i), the
+// quarters are winners of R16-(2i-1) vs R16-(2i), and so on — i.e. the natural
+// sequential pairing used by buildKnockoutFromGroup below. The FIFA match number
+// is noted in a comment on each line for traceability.
+type SeedSlot =
+  | { kind: "W"; group: string }
+  | { kind: "R"; group: string }
+  | { kind: "T"; allowed: string[] };
+
+const R32_TEMPLATE: Array<{ home: SeedSlot; away: SeedSlot }> = [
+  // R32-1  (M74)  Winner E   vs  3rd A/B/C/D/F
+  { home: { kind: "W", group: "E" }, away: { kind: "T", allowed: ["A", "B", "C", "D", "F"] } },
+  // R32-2  (M77)  Winner I   vs  3rd C/D/F/G/H
+  { home: { kind: "W", group: "I" }, away: { kind: "T", allowed: ["C", "D", "F", "G", "H"] } },
+  // R32-3  (M73)  Runner-up A vs  Runner-up B
+  { home: { kind: "R", group: "A" }, away: { kind: "R", group: "B" } },
+  // R32-4  (M75)  Winner F   vs  Runner-up C
+  { home: { kind: "W", group: "F" }, away: { kind: "R", group: "C" } },
+  // R32-5  (M83)  Runner-up K vs  Runner-up L
+  { home: { kind: "R", group: "K" }, away: { kind: "R", group: "L" } },
+  // R32-6  (M84)  Winner H   vs  Runner-up J
+  { home: { kind: "W", group: "H" }, away: { kind: "R", group: "J" } },
+  // R32-7  (M81)  Winner D   vs  3rd B/E/F/I/J
+  { home: { kind: "W", group: "D" }, away: { kind: "T", allowed: ["B", "E", "F", "I", "J"] } },
+  // R32-8  (M82)  Winner G   vs  3rd A/E/H/I/J
+  { home: { kind: "W", group: "G" }, away: { kind: "T", allowed: ["A", "E", "H", "I", "J"] } },
+  // R32-9  (M76)  Winner C   vs  Runner-up F
+  { home: { kind: "W", group: "C" }, away: { kind: "R", group: "F" } },
+  // R32-10 (M78)  Runner-up E vs  Runner-up I
+  { home: { kind: "R", group: "E" }, away: { kind: "R", group: "I" } },
+  // R32-11 (M79)  Winner A   vs  3rd C/E/F/H/I
+  { home: { kind: "W", group: "A" }, away: { kind: "T", allowed: ["C", "E", "F", "H", "I"] } },
+  // R32-12 (M80)  Winner L   vs  3rd E/H/I/J/K
+  { home: { kind: "W", group: "L" }, away: { kind: "T", allowed: ["E", "H", "I", "J", "K"] } },
+  // R32-13 (M86)  Winner J   vs  Runner-up H
+  { home: { kind: "W", group: "J" }, away: { kind: "R", group: "H" } },
+  // R32-14 (M88)  Runner-up D vs  Runner-up G
+  { home: { kind: "R", group: "D" }, away: { kind: "R", group: "G" } },
+  // R32-15 (M85)  Winner B   vs  3rd E/F/G/I/J
+  { home: { kind: "W", group: "B" }, away: { kind: "T", allowed: ["E", "F", "G", "I", "J"] } },
+  // R32-16 (M87)  Winner K   vs  3rd D/E/I/J/L
+  { home: { kind: "W", group: "K" }, away: { kind: "T", allowed: ["D", "E", "I", "J", "L"] } },
 ];
 
 function topThirdPlaced(
@@ -149,26 +179,74 @@ function topThirdPlaced(
     .slice(0, 8);
 }
 
+// Assigns the qualifying third-placed groups to the third-place bracket slots,
+// honouring each slot's allowed-groups constraint. Modelled as a maximum
+// bipartite matching (group -> slot) so that the result is always a valid
+// assignment when one exists — which, per Annex C, it does for all 495 possible
+// combinations of 8 qualifying groups. Deterministic given the input order.
+function assignThirdsToSlots(
+  groups: string[],
+  slots: Array<{ index: number; allowed: string[] }>,
+): Map<number, string> {
+  const slotToGroup: (string | null)[] = slots.map(() => null);
+
+  const augment = (group: string, visited: boolean[]): boolean => {
+    for (let s = 0; s < slots.length; s++) {
+      if (visited[s]) continue;
+      if (!slots[s].allowed.includes(group)) continue;
+      visited[s] = true;
+      const current = slotToGroup[s];
+      if (current === null || augment(current, visited)) {
+        slotToGroup[s] = group;
+        return true;
+      }
+    }
+    return false;
+  };
+
+  for (const g of groups) {
+    augment(g, slots.map(() => false));
+  }
+
+  const result = new Map<number, string>();
+  slots.forEach((slot, s) => {
+    const g = slotToGroup[s];
+    if (g) result.set(slot.index, g);
+  });
+  return result;
+}
+
 export type R32SeedTeam = { code: string; name: string } | null;
 
 export function buildR32Seeds(
   standings: Record<string, StandingRow[]>,
 ): Array<{ home: R32SeedTeam; away: R32SeedTeam }> {
   const thirds = topThirdPlaced(standings);
-  const pick = (slot: { kind: "W" | "R" | "T"; group?: string; rank?: number }): R32SeedTeam => {
-    if (slot.kind === "T") {
-      const row = thirds[(slot.rank ?? 1) - 1];
-      return row ? { code: row.teamCode, name: row.teamName } : null;
-    }
-    const rows = standings[slot.group!];
-    if (!rows) return null;
-    const idx = slot.kind === "W" ? 0 : 1;
-    const row = rows[idx];
-    return row ? { code: row.teamCode, name: row.teamName } : null;
+  const qualifyingGroups = thirds.map((r) => r.group);
+
+  // Gather the third-place slots (one per "T" template entry) and match the
+  // qualifying groups into them respecting each slot's allowed set.
+  const slots: Array<{ index: number; allowed: string[] }> = [];
+  R32_TEMPLATE.forEach((t, i) => {
+    if (t.home.kind === "T") slots.push({ index: i, allowed: t.home.allowed });
+    if (t.away.kind === "T") slots.push({ index: i, allowed: t.away.allowed });
+  });
+  const slotGroup = assignThirdsToSlots(qualifyingGroups, slots);
+
+  const seedFromRow = (row: StandingRow | undefined): R32SeedTeam =>
+    row ? { code: row.teamCode, name: row.teamName } : null;
+
+  const pick = (slot: SeedSlot, templateIndex: number): R32SeedTeam => {
+    if (slot.kind === "W") return seedFromRow(standings[slot.group]?.[0]);
+    if (slot.kind === "R") return seedFromRow(standings[slot.group]?.[1]);
+    // Third place: resolved via the bracket-slot matching above.
+    const g = slotGroup.get(templateIndex);
+    return g ? seedFromRow(standings[g]?.[2]) : null;
   };
-  return R32_TEMPLATE.map((t) => ({
-    home: pick(t.home),
-    away: pick(t.away),
+
+  return R32_TEMPLATE.map((t, i) => ({
+    home: pick(t.home, i),
+    away: pick(t.away, i),
   }));
 }
 

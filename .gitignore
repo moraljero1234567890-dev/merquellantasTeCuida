@@ -39,3 +39,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# Local backup of polla predictions (user data — never commit)
+polla_predictions.backup.json
