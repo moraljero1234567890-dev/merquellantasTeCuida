@@ -177,10 +177,12 @@ export type LockStatus = {
 
 export async function getLockStatus(): Promise<LockStatus> {
   const matches = await getAllMatches();
-  const WORLD_CUP_START = new Date("2026-06-11T00:00:00Z");
+  // Prediction submission deadline: Thu Jun 11 2026, 2:00 PM Colombia time
+  // (UTC-5) = 19:00 UTC. Until this moment all predictions remain editable.
+  const SUBMISSION_DEADLINE = new Date("2026-06-11T19:00:00Z");
   const now = new Date();
 
-  if (now < WORLD_CUP_START) {
+  if (now < SUBMISSION_DEADLINE) {
     return {
       groupLocked: false,
       knockoutOpen: true,
