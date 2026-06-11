@@ -90,6 +90,60 @@ export async function getAllMatches(): Promise<MatchDoc[]> {
   return col.find({}).sort({ utcDate: 1 }).toArray();
 }
 
+// Default minimum gap between live provider refreshes. Keeps us well under
+// football-data's free-tier limit (10 req/min) even with many concurrent
+// logins, while still keeping scores fresh for active users.
+const REFRESH_THROTTLE_MS = Number(
+  process.env.POLLA_REFRESH_THROTTLE_MS ?? 120_000,
+);
+
+/**
+ * Best-effort, throttled refresh of match results from the configured live
+ * provider. Safe to call on every login / page load: at most one request per
+ * throttle window actually hits the provider (the winner atomically claims the
+ * slot via the polla_meta doc), and any failure is swallowed so it can never
+ * block auth. Upserts by `_id`, so a stable provider updates fixtures in place
+ * without disturbing the predictions collection.
+ */
+export async function maybeRefreshMatches(): Promise<void> {
+  try {
+    const db = await getDb();
+    const meta = db.collection<{ _id: string; lastRefreshedAt: Date }>(
+      "polla_meta",
+    );
+    const cutoff = new Date(Date.now() - REFRESH_THROTTLE_MS);
+
+    // Atomically claim the refresh slot: only succeeds if no fresh refresh has
+    // happened within the window. Concurrent callers lose the race and bail.
+    const claim = await meta.updateOne(
+      { _id: "matches", lastRefreshedAt: { $lte: cutoff } },
+      { $set: { lastRefreshedAt: new Date() } },
+    );
+    if (claim.matchedCount === 0) {
+      // Either fresh already, or the doc doesn't exist yet. Seed it on first
+      // run; if another caller seeds concurrently the duplicate-key throws and
+      // we simply bail (they own this window).
+      const existing = await meta.findOne({ _id: "matches" });
+      if (existing) return; // fresh within window
+      try {
+        await meta.insertOne({ _id: "matches", lastRefreshedAt: new Date() });
+      } catch {
+        return; // lost the seed race
+      }
+    }
+
+    const { fetchLatestFromConfiguredProvider } = await import("./providers");
+    const provider = await fetchLatestFromConfiguredProvider();
+    if (!provider.docs.length) return;
+    const col = await pollaMatchesCollection();
+    for (const d of provider.docs) {
+      await col.replaceOne({ _id: d._id }, d, { upsert: true });
+    }
+  } catch (err) {
+    console.warn("maybeRefreshMatches failed (non-fatal):", err);
+  }
+}
+
 export async function getPollaUserByCedula(identifier: string): Promise<PollaLoginResult | null> {
   const db = await getDb();
   const isEmail = identifier.includes("@");

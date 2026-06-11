@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { auth } from "@/lib/auth";
 import { getDb } from "@/lib/db";
+import { maybeRefreshMatches } from "@/lib/polla/store";
 
 export const dynamic = "force-dynamic";
 
@@ -19,6 +20,9 @@ export async function GET() {
   if (!fondoMember) {
     return NextResponse.json({ user: null }, { status: 403 });
   }
+
+  // Keep match results fresh whenever someone signs in (throttled, best-effort).
+  await maybeRefreshMatches();
 
   return NextResponse.json({
     user: {

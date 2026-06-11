@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { authenticatePollaUser } from "@/lib/polla/store";
+import { authenticatePollaUser, maybeRefreshMatches } from "@/lib/polla/store";
 
 export const dynamic = "force-dynamic";
 
@@ -22,6 +22,8 @@ export async function POST(request: Request) {
     if (!user) {
       return NextResponse.json({ error: "User not found or not authorized" }, { status: 401 });
     }
+    // Keep match results fresh whenever someone signs in (throttled, best-effort).
+    await maybeRefreshMatches();
     return NextResponse.json({ user });
   } catch (err) {
     const msg = err instanceof Error ? err.message : "Database error";
