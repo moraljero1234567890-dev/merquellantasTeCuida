@@ -505,6 +505,7 @@ export default function PollaPredictPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saveState, setSaveState] = useState<SaveState>("idle");
+  const [exporting, setExporting] = useState(false);
   const [lockStatus, setLockStatus] = useState<{
     groupLocked: boolean;
     knockoutOpen: boolean;
@@ -744,6 +745,39 @@ export default function PollaPredictPage() {
     [sendPayload],
   );
 
+  const handleExport = useCallback(async () => {
+    if (!session || exporting) return;
+    setExporting(true);
+    try {
+      // Flush any pending debounced saves so the PDF reflects the latest edits.
+      const ids = Array.from(saveTimers.current.keys());
+      for (const id of ids) {
+        const t = saveTimers.current.get(id);
+        if (t) clearTimeout(t);
+        saveTimers.current.delete(id);
+        const payload = pendingPayloads.current.get(id);
+        if (payload) await sendPayload(id, payload);
+      }
+      const res = await fetch(
+        `/api/polla/predictions/${attemptNum}/pdf?cedula=${encodeURIComponent(session.cedula)}`,
+      );
+      if (!res.ok) throw new Error(String(res.status));
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `polla-intento-${attemptNum}.pdf`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
+    } catch {
+      setError("No pudimos generar el PDF. Intenta de nuevo.");
+    } finally {
+      setExporting(false);
+    }
+  }, [session, attemptNum, exporting, sendPayload]);
+
   function queueGroupSave(
     matchId: string,
     home: number | null,
@@ -961,6 +995,36 @@ export default function PollaPredictPage() {
                   {(groupComplete || lockStatus?.useActualStandings) ? `${knockoutFilled}/${totalKnockout}` : "—"}
                 </dd>
               </div>
+            </div>
+            <div className="mt-8">
+              <button
+                type="button"
+                onClick={handleExport}
+                disabled={exporting || loading || !prediction}
+                className="inline-flex items-center gap-2 border border-white/30 bg-white px-5 py-3 text-xs font-bold uppercase tracking-[0.2em] text-[var(--foreground)] transition hover:bg-[var(--brand)] hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {exporting ? (
+                  "Generando PDF..."
+                ) : (
+                  <>
+                    <svg
+                      aria-hidden
+                      viewBox="0 0 24 24"
+                      className="h-4 w-4"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth={2}
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="M12 3v12" />
+                      <path d="m7 10 5 5 5-5" />
+                      <path d="M5 21h14" />
+                    </svg>
+                    Descargar PDF de mi boleta
+                  </>
+                )}
+              </button>
             </div>
           </div>
         </section>
