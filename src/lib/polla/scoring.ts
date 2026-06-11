@@ -154,20 +154,28 @@ export function computeLeaderboard(
     for (const m of groupReal) {
       const pick = p.groupScores[m.id];
       if (!pick) continue;
-      if (pick.home === m.home && pick.away === m.away) {
+      // Points accumulate across tiers, so a more accurate prediction always
+      // scores more. Each tier implies the one below it (exact => same goal
+      // difference => same outcome), so we award the sum of every tier earned:
+      //   exact score        = 50 + 30 + 20 = 100
+      //   correct goal diff  =      30 + 20 =  50
+      //   correct outcome    =           30 =  30
+      // The breakdown buckets stay mutually exclusive for a readable summary.
+      const sameOutcome =
+        outcome(pick.home, pick.away) === outcome(m.home, m.away);
+      const sameGoalDiff = pick.home - pick.away === m.home - m.away;
+      const exact = pick.home === m.home && pick.away === m.away;
+      if (exact) {
         br.group.exact += 1;
-        br.group.points += POINTS.GROUP_EXACT;
-      } else if (outcome(pick.home, pick.away) === outcome(m.home, m.away)) {
-        if ((pick.home - pick.away) === (m.home - m.away)) {
-          br.group.goalDiff += 1;
-          br.group.points += POINTS.GROUP_GOAL_DIFF;
-        } else {
-          br.group.outcomes += 1;
-          br.group.points += POINTS.GROUP_OUTCOME;
-        }
-      } else if ((pick.home - pick.away) === (m.home - m.away)) {
+        br.group.points +=
+          POINTS.GROUP_EXACT + POINTS.GROUP_OUTCOME + POINTS.GROUP_GOAL_DIFF;
+      } else if (sameGoalDiff) {
+        // sameGoalDiff implies sameOutcome (equal margin => equal winner).
         br.group.goalDiff += 1;
-        br.group.points += POINTS.GROUP_GOAL_DIFF;
+        br.group.points += POINTS.GROUP_OUTCOME + POINTS.GROUP_GOAL_DIFF;
+      } else if (sameOutcome) {
+        br.group.outcomes += 1;
+        br.group.points += POINTS.GROUP_OUTCOME;
       }
     }
 

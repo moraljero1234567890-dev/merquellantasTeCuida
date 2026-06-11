@@ -135,13 +135,52 @@ export async function maybeRefreshMatches(): Promise<void> {
     const { fetchLatestFromConfiguredProvider } = await import("./providers");
     const provider = await fetchLatestFromConfiguredProvider();
     if (!provider.docs.length) return;
-    const col = await pollaMatchesCollection();
-    for (const d of provider.docs) {
-      await col.replaceOne({ _id: d._id }, d, { upsert: true });
-    }
+    await applyProviderResults(provider.docs);
   } catch (err) {
     console.warn("maybeRefreshMatches failed (non-fatal):", err);
   }
+}
+
+/**
+ * Apply freshly-fetched provider matches onto the existing fixtures, updating
+ * results in place. Deliberately conservative so an automatic refresh can never
+ * corrupt the board:
+ *
+ *  - Only updates matches whose `_id` already exists. The initial seed creates
+ *    every group + knockout fixture, and predictions are keyed to those ids, so
+ *    a provider whose id scheme differs would otherwise inject a duplicate set
+ *    of matches that no prediction lines up with. We skip unknown ids instead.
+ *  - Never downgrades a match that is already FINISHED with a score back to a
+ *    scheduled / scoreless state, so a transient provider gap can't wipe a real
+ *    result that users have already been scored against.
+ */
+export async function applyProviderResults(
+  docs: MatchDoc[],
+): Promise<{ updated: number; skipped: number; unknown: number }> {
+  const col = await pollaMatchesCollection();
+  const existing = await col.find({}).toArray();
+  const byId = new Map(existing.map((m) => [m._id, m]));
+  let updated = 0;
+  let skipped = 0;
+  let unknown = 0;
+  for (const d of docs) {
+    const prev = byId.get(d._id);
+    if (!prev) {
+      unknown += 1;
+      continue;
+    }
+    const prevHasResult =
+      prev.status === "FINISHED" && prev.score?.fullTime != null;
+    const nextHasResult =
+      d.status === "FINISHED" && d.score?.fullTime != null;
+    if (prevHasResult && !nextHasResult) {
+      skipped += 1;
+      continue;
+    }
+    await col.replaceOne({ _id: d._id }, d);
+    updated += 1;
+  }
+  return { updated, skipped, unknown };
 }
 
 export async function getPollaUserByCedula(identifier: string): Promise<PollaLoginResult | null> {

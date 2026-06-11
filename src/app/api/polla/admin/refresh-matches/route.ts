@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { isPollaAdminRequest } from "@/lib/polla/admin-auth";
-import { pollaMatchesCollection } from "@/lib/polla/collections";
 import { fetchLatestFromConfiguredProvider } from "@/lib/polla/providers";
+import { applyProviderResults } from "@/lib/polla/store";
 
 export const dynamic = "force-dynamic";
 
@@ -16,17 +16,10 @@ async function handleRefresh(): Promise<Response> {
     );
   }
   if (!provider.docs.length) {
-    return NextResponse.json({ source: provider.source, upserts: 0, warning: "Provider returned 0 matches" });
+    return NextResponse.json({ source: provider.source, updated: 0, warning: "Provider returned 0 matches" });
   }
-  const col = await pollaMatchesCollection();
-  let upserts = 0;
-  for (const d of provider.docs) {
-    await col.replaceOne({ _id: d._id }, d, { upsert: true });
-    upserts++;
-  }
-  await col.createIndex({ utcDate: 1 });
-  await col.createIndex({ stage: 1, group: 1, matchday: 1 });
-  return NextResponse.json({ source: provider.source, upserts });
+  const result = await applyProviderResults(provider.docs);
+  return NextResponse.json({ source: provider.source, ...result });
 }
 
 export async function POST(request: NextRequest) {

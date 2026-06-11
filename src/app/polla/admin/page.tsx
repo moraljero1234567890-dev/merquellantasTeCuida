@@ -262,7 +262,11 @@ export default function PollaAdminPage() {
       }
       setBanner({
         kind: "ok",
-        text: `${data.upserts} partidos cargados desde ${data.source}.`,
+        text:
+          `${data.updated} partidos actualizados desde ${data.source}` +
+          (data.unknown ? ` · ${data.unknown} ignorados (id desconocido)` : "") +
+          (data.skipped ? ` · ${data.skipped} sin cambios` : "") +
+          ".",
       });
       await loadLeaderboard(savedToken);
     } catch (err) {
@@ -613,7 +617,7 @@ export default function PollaAdminPage() {
                 </tbody>
               </table>
               <p className="mt-3 font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--foreground-muted)]">
-                Grupos: ex = exacto (50), res = resultado (30), dif = diferencia de gol (20) · Camp = campeón (300), Sub = subcampeón (250), ambos = 350
+                Grupos (acumulan): ex = exacto (100), dif = diferencia de gol (50), res = solo resultado (30) · Camp = campeón (300), Sub = subcampeón (250), ambos = 350
               </p>
             </div>
           )}

@@ -17,10 +17,14 @@ const partners = [
   },
 ];
 
+// Points accumulate: a more accurate prediction earns every tier below it.
+//   exact score  = resultado 30 + diferencia 20 + marcador 50 = 100
+//   goal diff    = resultado 30 + diferencia 20              =  50
+//   resultado    = resultado 30                               =  30
 const groupRows = [
-  { phase: "Marcador exacto", points: 50 },
+  { phase: "Marcador exacto (resultado + diferencia + marcador)", points: 100 },
+  { phase: "Diferencia de gol (incluye el resultado)", points: 50 },
   { phase: "Acertar el resultado (ganador o empate)", points: 30 },
-  { phase: "Acertar la diferencia de gol", points: 20 },
 ];
 
 const knockoutRows = [
