@@ -177,9 +177,9 @@ export type LockStatus = {
 
 export async function getLockStatus(): Promise<LockStatus> {
   const matches = await getAllMatches();
-  // Prediction submission deadline: Thu Jun 11 2026, 2:00 PM Colombia time
+  // Prediction submission deadline: Fri Jun 12 2026, 2:00 PM Colombia time
   // (UTC-5) = 19:00 UTC. Until this moment all predictions remain editable.
-  const SUBMISSION_DEADLINE = new Date("2026-06-11T19:00:00Z");
+  const SUBMISSION_DEADLINE = new Date("2026-06-12T19:00:00Z");
   const now = new Date();
 
   if (now < SUBMISSION_DEADLINE) {

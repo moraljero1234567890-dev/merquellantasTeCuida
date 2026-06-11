@@ -981,7 +981,7 @@ export default function PollaPredictPage() {
 
             {lockStatus?.groupLocked && !lockStatus.allGroupFinished && (
               <div className="mx-auto mt-6 max-w-6xl border-l-4 border-red-500 bg-red-50 p-4 px-6 text-sm text-red-800">
-                La fase de grupos está bloqueada. Los pronósticos de grupos se cerraron el 11 de junio.
+                La fase de grupos está bloqueada. Los pronósticos de grupos se cerraron el 12 de junio.
               </div>
             )}
 
