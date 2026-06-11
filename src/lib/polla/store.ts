@@ -270,12 +270,16 @@ export type LockStatus = {
 
 export async function getLockStatus(): Promise<LockStatus> {
   const matches = await getAllMatches();
-  // Prediction submission deadline: Fri Jun 12 2026, 2:00 PM Colombia time
-  // (UTC-5) = 19:00 UTC. Until this moment all predictions remain editable.
+  // Predictions are now CLOSED. The tournament has started, so every attempt is
+  // locked and no group or knockout edits are accepted. Flip PREDICTIONS_OPEN
+  // back to true (and check the deadline) only to reopen submissions.
+  const PREDICTIONS_OPEN = false;
+  // Original submission deadline: Fri Jun 12 2026, 2:00 PM Colombia time
+  // (UTC-5) = 19:00 UTC. Kept for reference; gated behind PREDICTIONS_OPEN.
   const SUBMISSION_DEADLINE = new Date("2026-06-12T19:00:00Z");
   const now = new Date();
 
-  if (now < SUBMISSION_DEADLINE) {
+  if (PREDICTIONS_OPEN && now < SUBMISSION_DEADLINE) {
     return {
       groupLocked: false,
       knockoutOpen: true,
