@@ -1,12 +1,13 @@
 "use client";
 
 import Link from "next/link";
-import { useParams, useRouter } from "next/navigation";
+import { useParams } from "next/navigation";
 import { useEffect, useMemo, useState } from "react";
 import { formatDate } from "@/data/polla/worldcup2026";
 import { staticFallback, type ApiMatch } from "@/lib/polla/matches";
 import { usePollaAuth } from "@/lib/polla/use-polla-auth";
 import { displayTeam, normalizeTeam } from "@/lib/polla/team-display";
+import { groupMatchResult, type GroupTier } from "@/lib/polla/group-points";
 import type { KnockoutPick, PredictionDoc } from "@/lib/polla/types";
 
 const MERQUE_LOGO =
@@ -47,8 +48,21 @@ function pickClass(
   return "border-red-400 bg-red-50";
 }
 
+const TIER_LABEL: Record<GroupTier, string> = {
+  exact: "Marcador exacto",
+  goalDiff: "Diferencia de gol",
+  outcome: "Resultado",
+  none: "Sin acierto",
+};
+
+const TIER_BADGE: Record<GroupTier, string> = {
+  exact: "bg-emerald-600 text-white",
+  goalDiff: "bg-amber-500 text-white",
+  outcome: "bg-amber-400 text-[var(--foreground)]",
+  none: "bg-[var(--line)] text-[var(--foreground-muted)]",
+};
+
 export default function PollaResultsPage() {
-  const router = useRouter();
   const params = useParams<{ attempt: string }>();
   const attemptNum = Number(params.attempt);
 
@@ -93,6 +107,15 @@ export default function PollaResultsPage() {
     () => matches.filter((m) => m.stage === "GROUP_STAGE" && m.group),
     [matches],
   );
+
+  const groupPointsTotal = useMemo(() => {
+    if (!prediction) return 0;
+    return groupMatches.reduce((sum, m) => {
+      const actual = m.score?.fullTime ?? null;
+      if (m.status !== "FINISHED" || !actual) return sum;
+      return sum + groupMatchResult(prediction.groupScores[m._id] ?? null, actual).points;
+    }, 0);
+  }, [groupMatches, prediction]);
 
   const handleLogout = logout;
 
@@ -158,8 +181,11 @@ export default function PollaResultsPage() {
             )}
 
             <section className="mx-auto max-w-6xl px-6 py-10">
-              <h2 className="border-b border-[var(--foreground)] pb-2 font-mono text-xs font-bold uppercase tracking-[0.3em]">
-                Fase de grupos
+              <h2 className="flex items-center justify-between gap-3 border-b border-[var(--foreground)] pb-2 font-mono text-xs font-bold uppercase tracking-[0.3em]">
+                <span>Fase de grupos</span>
+                <span className="text-[var(--brand)]">
+                  {groupPointsTotal} pts acumulados
+                </span>
               </h2>
               <ul className="mt-6 grid gap-3">
                 {groupMatches.map((m) => {
@@ -167,6 +193,10 @@ export default function PollaResultsPage() {
                   const actual = m.score?.fullTime ?? null;
                   const homeT = normalizeTeam(m.home);
                   const awayT = normalizeTeam(m.away);
+                  const scored = m.status === "FINISHED" && actual != null;
+                  const { tier, points } = scored
+                    ? groupMatchResult(predicted, actual)
+                    : { tier: "none" as GroupTier, points: 0 };
                   return (
                     <li
                       key={m._id}
@@ -225,12 +255,22 @@ export default function PollaResultsPage() {
                           {awayT.name}
                         </span>
                       </div>
-                      <div className="font-mono text-[10px] uppercase tracking-[0.28em] text-[var(--foreground-muted)] md:text-right">
-                        {m.status === "FINISHED"
-                          ? "Final"
-                          : m.status === "IN_PLAY"
-                            ? "En juego"
-                            : "Programado"}
+                      <div className="flex items-center justify-between gap-2 md:flex-col md:items-end md:justify-center">
+                        <span className="font-mono text-[10px] uppercase tracking-[0.28em] text-[var(--foreground-muted)]">
+                          {m.status === "FINISHED"
+                            ? "Final"
+                            : m.status === "IN_PLAY"
+                              ? "En juego"
+                              : "Programado"}
+                        </span>
+                        {scored && (
+                          <span
+                            title={TIER_LABEL[tier]}
+                            className={`rounded-sm px-2 py-1 font-mono text-[11px] font-black tabular-nums ${TIER_BADGE[tier]}`}
+                          >
+                            {points > 0 ? `+${points}` : "0"} pts
+                          </span>
+                        )}
                       </div>
                     </li>
                   );

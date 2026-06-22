@@ -1,5 +1,6 @@
 import "server-only";
 import type { KnockoutPick, MatchDoc, PredictionDoc } from "./types";
+import { groupMatchResult } from "./group-points";
 
 export const POINTS = {
   GROUP_OUTCOME: 30,
@@ -39,12 +40,6 @@ type FinishedGroupMatch = {
   home: number;
   away: number;
 };
-
-function outcome(home: number, away: number): "H" | "A" | "D" {
-  if (home > away) return "H";
-  if (away > home) return "A";
-  return "D";
-}
 
 function finishedGroupMatches(matches: MatchDoc[]): FinishedGroupMatch[] {
   const out: FinishedGroupMatch[] = [];
@@ -154,29 +149,18 @@ export function computeLeaderboard(
     for (const m of groupReal) {
       const pick = p.groupScores[m.id];
       if (!pick) continue;
-      // Points accumulate across tiers, so a more accurate prediction always
-      // scores more. Each tier implies the one below it (exact => same goal
-      // difference => same outcome), so we award the sum of every tier earned:
-      //   exact score        = 50 + 30 + 20 = 100
-      //   correct goal diff  =      30 + 20 =  50
-      //   correct outcome    =           30 =  30
-      // The breakdown buckets stay mutually exclusive for a readable summary.
-      const sameOutcome =
-        outcome(pick.home, pick.away) === outcome(m.home, m.away);
-      const sameGoalDiff = pick.home - pick.away === m.home - m.away;
-      const exact = pick.home === m.home && pick.away === m.away;
-      if (exact) {
-        br.group.exact += 1;
-        br.group.points +=
-          POINTS.GROUP_EXACT + POINTS.GROUP_OUTCOME + POINTS.GROUP_GOAL_DIFF;
-      } else if (sameGoalDiff) {
-        // sameGoalDiff implies sameOutcome (equal margin => equal winner).
-        br.group.goalDiff += 1;
-        br.group.points += POINTS.GROUP_OUTCOME + POINTS.GROUP_GOAL_DIFF;
-      } else if (sameOutcome) {
-        br.group.outcomes += 1;
-        br.group.points += POINTS.GROUP_OUTCOME;
-      }
+      // Shared with the results comparison page so points never drift. The
+      // breakdown buckets stay mutually exclusive for a readable summary while
+      // `points` already accumulates every tier earned (exact=100, goal
+      // diff=50, outcome=30).
+      const { tier, points } = groupMatchResult(pick, {
+        home: m.home,
+        away: m.away,
+      });
+      if (tier === "exact") br.group.exact += 1;
+      else if (tier === "goalDiff") br.group.goalDiff += 1;
+      else if (tier === "outcome") br.group.outcomes += 1;
+      br.group.points += points;
     }
 
     const gotChampion = knockReal.champion && p.champion?.code === knockReal.champion;
