@@ -42,3 +42,4 @@ next-env.d.ts
 
 # Local backup of polla predictions (user data — never commit)
 polla_predictions.backup.json
+scripts/void-gf6-backup.json
