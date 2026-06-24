@@ -50,6 +50,9 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           token.nombre = dbUser.nombre;
           token.rol = dbUser.rol;
           token.cedula = dbUser.cedula;
+          // City the staff member operates in — used to scope lubricentro
+          // alerts/revisiones to a single shop and to stamp every order.
+          token.ciudad = dbUser.ciudad || null;
         }
       }
       return token;
@@ -59,6 +62,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
       session.user.nombre = token.nombre as string;
       session.user.rol = token.rol as string;
       session.user.cedula = token.cedula as string;
+      session.user.ciudad = (token.ciudad as string | null) ?? null;
       return session;
     },
   },

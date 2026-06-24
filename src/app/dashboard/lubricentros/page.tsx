@@ -27,6 +27,11 @@ import {
   Download,
   Mail,
   X,
+  MessageCircle,
+  History,
+  Plus,
+  Trash2,
+  MapPin,
 } from 'lucide-react';
 
 // Canonical service rows printed on the MERQUELLANTAS "Orden de trabajo".
@@ -115,10 +120,72 @@ interface Orden extends Fields {
   servicios: ServicioLinea[];
   created_at: string;
   created_by_nombre?: string | null;
+  updated_at?: string | null;
+  updated_by_nombre?: string | null;
+  ciudad?: string | null;
   proximo_cambio_fecha?: string | null;
   gestion_tipo?: string | null;
   gestion_fecha?: string | null;
   gestion_nota?: string | null;
+}
+
+// Normalize a Colombian phone number to wa.me format (57 + 10 digits).
+// Accepts the many ways numbers get typed — "3226433402", "322-643-3402",
+// "322 643 3402", "+57 322 643 3402" — and returns null when it isn't a valid
+// 10-digit mobile, so the WhatsApp button can be hidden/disabled.
+function normalizeCoPhone(raw?: string | null): string | null {
+  if (!raw) return null;
+  let digits = String(raw).replace(/\D/g, '');
+  // Strip a country code the user may already have included.
+  if (digits.startsWith('57') && digits.length > 10) digits = digits.slice(2);
+  // Drop any leading zeros (e.g. "03xx...").
+  digits = digits.replace(/^0+/, '');
+  if (digits.length !== 10) return null; // Colombian mobiles are 10 digits.
+  return '57' + digits;
+}
+
+// Build a wa.me link with a formal, corporate reminder message for an order's
+// customer. Returns null when the phone can't be normalized.
+function buildWhatsappLink(o: Orden): string | null {
+  const phone = normalizeCoPhone(o.celular);
+  if (!phone) return null;
+  const placa = (o.placa || '').toUpperCase();
+  const nombre = (o.nombre || '').trim().split(/\s+/)[0]; // first name only
+  const saludo = nombre ? `Hola ${nombre},` : 'Hola,';
+  const msg =
+    `${saludo} te saluda el equipo de Merquellantas. ` +
+    `Nuevamente, gracias por confiar en nosotros. ` +
+    `Queremos recordarte que tu vehículo${placa ? ` de placa ${placa}` : ''} tiene un ` +
+    `cambio recomendado próximo. Te invitamos a acercarte a tu lubricentro ` +
+    `Merquellantas, donde con gusto te atenderemos para mantener tu vehículo en ` +
+    `óptimas condiciones. ¡Será un placer servirte!`;
+  return `https://wa.me/${phone}?text=${encodeURIComponent(msg)}`;
+}
+
+// Expand a saved service list into editable rows. Keeps the canonical service
+// order while preserving MULTIPLE line items per category (e.g. two different
+// oils installed on the same vehicle). Categories with no saved line get one
+// blank row so the full checklist stays visible.
+function buildServicioRows(saved?: ServicioLinea[]): ServicioLinea[] {
+  const rows: ServicioLinea[] = [];
+  for (const servicio of SERVICIOS) {
+    const matches = (saved || []).filter((s) => s.servicio === servicio);
+    if (matches.length === 0) {
+      rows.push({ servicio, referencia: '', unidad: '', valor_unitario: '', subtotal: '', exento_iva: false });
+    } else {
+      for (const m of matches) {
+        rows.push({
+          servicio,
+          referencia: m.referencia || '',
+          unidad: m.unidad || '',
+          valor_unitario: m.valor_unitario || '',
+          subtotal: m.subtotal || '',
+          exento_iva: !!m.exento_iva,
+        });
+      }
+    }
+  }
+  return rows;
 }
 
 // Shapes returned by the autocomplete suggestion endpoints.
@@ -384,7 +451,7 @@ function OrderActions({ id }: { id: string }) {
 }
 
 export default function LubricentrosPage() {
-  const { data: session } = useSession();
+  const { data: session, status } = useSession();
   const [tab, setTab] = useState<'nueva' | 'buscar' | 'alertas' | 'revisiones'>('nueva');
 
   // ---- Form state ----
@@ -529,6 +596,27 @@ export default function LubricentrosPage() {
   const toggleExento = (i: number) =>
     setServicios((rows) => rows.map((r, idx) => (idx === i ? { ...r, exento_iva: !r.exento_iva } : r)));
 
+  // Add another line item of the same category right below row i, so multiple
+  // products of one category (e.g. two oils) can be recorded on one vehicle.
+  const addServicio = (i: number) =>
+    setServicios((rows) => {
+      const copy = [...rows];
+      copy.splice(i + 1, 0, {
+        servicio: rows[i].servicio,
+        referencia: '',
+        unidad: '',
+        valor_unitario: '',
+        subtotal: '',
+        exento_iva: false,
+      });
+      return copy;
+    });
+
+  // Remove a line item (only offered on the extra rows of a category, never the
+  // base row, so the full service checklist always stays visible).
+  const removeServicio = (i: number) =>
+    setServicios((rows) => rows.filter((_, idx) => idx !== i));
+
   // Fill the whole client / vehicle block from a chosen suggestion. Vehicle fill
   // never touches km_actual — the latest reading must always be entered.
   const fillCliente = (s: ClienteSug) =>
@@ -565,22 +653,8 @@ export default function LubricentrosPage() {
     (Object.keys(emptyFields) as (keyof Fields)[]).forEach((k) => {
       next[k] = (o[k] as string) || '';
     });
-    const rows = emptyServicios();
-    (o.servicios || []).forEach((s) => {
-      const idx = rows.findIndex((r) => r.servicio === s.servicio);
-      if (idx >= 0) {
-        rows[idx] = {
-          servicio: s.servicio,
-          referencia: s.referencia || '',
-          unidad: s.unidad || '',
-          valor_unitario: s.valor_unitario || '',
-          subtotal: s.subtotal || '',
-          exento_iva: !!s.exento_iva,
-        };
-      }
-    });
     setFields(next);
-    setServicios(rows);
+    setServicios(buildServicioRows(o.servicios));
     setEditingId(o._id);
     setEditingNo(o.orden_no || null);
     setActionsOrder(null);
@@ -695,6 +769,61 @@ export default function LubricentrosPage() {
     return () => clearTimeout(t);
   }, [query, tab, runSearch]);
 
+  // ---- City scope (alerts + revisiones) ----
+  // A bunch of shops share this app, so the alert/revisión lists are scoped to a
+  // single city. Defaults to the logged-in staff member's city; '' = all cities.
+  const [ciudadFiltro, setCiudadFiltro] = useState<string>('');
+  const [ciudades, setCiudades] = useState<string[]>([]);
+  const [ciudadInit, setCiudadInit] = useState(false);
+
+  // Seed the filter with the user's own city once the session is known.
+  useEffect(() => {
+    if (ciudadInit || status === 'loading') return;
+    const c = session?.user?.ciudad;
+    if (c) setCiudadFiltro(c);
+    setCiudadInit(true);
+  }, [session, status, ciudadInit]);
+
+  // Load the distinct cities seen across orders for the filter dropdown.
+  useEffect(() => {
+    if (!session) return;
+    (async () => {
+      try {
+        const res = await fetch('/api/lubricentros?ciudades=true');
+        if (res.ok) {
+          const d = await res.json();
+          setCiudades(Array.isArray(d.ciudades) ? d.ciudades : []);
+        }
+      } catch {
+        // ignore
+      }
+    })();
+  }, [session]);
+
+  // The user's own city is always offered even before any order exists for it.
+  const ciudadOptions = Array.from(
+    new Set([...(session?.user?.ciudad ? [session.user.ciudad] : []), ...ciudades]),
+  ).sort((a, b) => a.localeCompare(b, 'es'));
+
+  // Shared city-scope dropdown for the alerts and revisiones lists.
+  const citySelector = (
+    <div className="flex items-center gap-2">
+      <MapPin className="h-4 w-4 text-gray-400" />
+      <select
+        value={ciudadFiltro}
+        onChange={(e) => setCiudadFiltro(e.target.value)}
+        className="rounded-lg border border-gray-300 bg-white py-2 px-3 text-sm text-gray-900 focus:ring-amber-500 focus:border-amber-500"
+      >
+        <option value="">Todas las ciudades</option>
+        {ciudadOptions.map((c) => (
+          <option key={c} value={c}>
+            {c}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+
   // ---- Alerts state ----
   const [alertas, setAlertas] = useState<Orden[]>([]);
   const [alertasPage, setAlertasPage] = useState(1);
@@ -707,7 +836,8 @@ export default function LubricentrosPage() {
       if (!session) return;
       setLoadingAlertas(true);
       try {
-        const res = await fetch(`/api/lubricentros?alertas=true&page=${page}&pageSize=${ALERTAS_PAGE_SIZE}`);
+        const cq = ciudadFiltro ? `&ciudad=${encodeURIComponent(ciudadFiltro)}` : '';
+        const res = await fetch(`/api/lubricentros?alertas=true&page=${page}&pageSize=${ALERTAS_PAGE_SIZE}${cq}`);
         if (res.ok) {
           const data = await res.json();
           setAlertas(data.results || []);
@@ -719,7 +849,7 @@ export default function LubricentrosPage() {
         setLoadingAlertas(false);
       }
     },
-    [session],
+    [session, ciudadFiltro],
   );
 
   useEffect(() => {
@@ -738,7 +868,8 @@ export default function LubricentrosPage() {
       if (!session) return;
       setLoadingRevisiones(true);
       try {
-        const res = await fetch(`/api/lubricentros?revisiones=true&page=${page}&pageSize=${ALERTAS_PAGE_SIZE}`);
+        const cq = ciudadFiltro ? `&ciudad=${encodeURIComponent(ciudadFiltro)}` : '';
+        const res = await fetch(`/api/lubricentros?revisiones=true&page=${page}&pageSize=${ALERTAS_PAGE_SIZE}${cq}`);
         if (res.ok) {
           const data = await res.json();
           setRevisiones(data.results || []);
@@ -750,12 +881,18 @@ export default function LubricentrosPage() {
         setLoadingRevisiones(false);
       }
     },
-    [session],
+    [session, ciudadFiltro],
   );
 
   useEffect(() => {
     if (tab === 'revisiones') fetchRevisiones(revisionesPage);
   }, [tab, revisionesPage, fetchRevisiones]);
+
+  // Switching cities resets both lists to their first page.
+  useEffect(() => {
+    setAlertasPage(1);
+    setRevisionesPage(1);
+  }, [ciudadFiltro]);
 
   // ---- Manage ("gestionar") an alert ----
   const [gestionTarget, setGestionTarget] = useState<Orden | null>(null);
@@ -812,6 +949,31 @@ export default function LubricentrosPage() {
     }
   };
 
+  // ---- Vehicle history ----
+  const [historialPlaca, setHistorialPlaca] = useState<string | null>(null);
+  const [historial, setHistorial] = useState<Orden[]>([]);
+  const [loadingHistorial, setLoadingHistorial] = useState(false);
+
+  // Open the full service history (every order ever recorded) for a plate.
+  const openHistorial = async (placa: string) => {
+    const p = (placa || '').trim();
+    if (!p) return;
+    setHistorialPlaca(p.toUpperCase());
+    setHistorial([]);
+    setLoadingHistorial(true);
+    try {
+      const res = await fetch(`/api/lubricentros?historial=${encodeURIComponent(p)}`);
+      if (res.ok) {
+        const d = await res.json();
+        setHistorial(Array.isArray(d.results) ? d.results : []);
+      }
+    } catch {
+      // ignore
+    } finally {
+      setLoadingHistorial(false);
+    }
+  };
+
   const formatDateOnly = (date: string | Date) =>
     new Intl.DateTimeFormat('es-CO', { year: 'numeric', month: 'long', day: 'numeric' }).format(
       new Date(date),
@@ -828,6 +990,20 @@ export default function LubricentrosPage() {
   );
   const totalIva = Math.round(totalIvaBase * 0.19);
   const totalTotal = totalSubtotal + totalIva;
+
+  // Per-row occurrence index within its category (0 = base row, 1 = "2nd",
+  // ...) and total rows per category — drives the "+ otro" / remove controls
+  // and the "#2/#3" labels for multiple products of the same category.
+  const servicioOcc: number[] = [];
+  const servicioCount: Record<string, number> = {};
+  {
+    const seen: Record<string, number> = {};
+    for (const r of servicios) {
+      servicioOcc.push(seen[r.servicio] ?? 0);
+      seen[r.servicio] = (seen[r.servicio] ?? 0) + 1;
+    }
+    for (const r of servicios) servicioCount[r.servicio] = (servicioCount[r.servicio] ?? 0) + 1;
+  }
 
   // Last recorded KM for the current plate (if known) — KM must not go below it.
   const placaSug = vehiculoSugs.find(
@@ -1059,8 +1235,10 @@ export default function LubricentrosPage() {
                 </h2>
                 <p className="text-xs text-gray-400 mb-4">
                   Opcional. Alineación usa referencia sencilla/doble; en los demás escribe el producto/referencia
-                  aplicado. Unidad y valor unitario son enteros; el subtotal (unidad × valor) y los totales se
-                  calculan solos. Marca <strong>Exento IVA</strong> en lubricantes (suman al total pero no pagan IVA).
+                  aplicado. Usa <strong>+ Otro</strong> para registrar varios productos de la misma categoría
+                  (p. ej. dos aceites distintos) en un mismo vehículo. Unidad y valor unitario son enteros; el
+                  subtotal (unidad × valor) y los totales se calculan solos. Marca <strong>Exento IVA</strong> en
+                  lubricantes (suman al total pero no pagan IVA).
                 </p>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
@@ -1075,9 +1253,40 @@ export default function LubricentrosPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {servicios.map((row, i) => (
-                        <tr key={row.servicio} className="border-b border-gray-100 last:border-0">
-                          <td className="py-2 pr-3 text-gray-700 whitespace-nowrap">{row.servicio}</td>
+                      {servicios.map((row, i) => {
+                        const occ = servicioOcc[i];
+                        const many = servicioCount[row.servicio] > 1;
+                        return (
+                        <tr key={i} className="border-b border-gray-100 last:border-0">
+                          <td className="py-2 pr-3 text-gray-700 whitespace-nowrap align-top">
+                            <div className="flex items-center gap-1.5">
+                              {occ > 0 && <span className="text-gray-300">↳</span>}
+                              <span className={occ > 0 ? 'text-gray-500' : ''}>{row.servicio}</span>
+                              {many && (
+                                <span className="px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 text-[10px] font-semibold">
+                                  #{occ + 1}
+                                </span>
+                              )}
+                            </div>
+                            <div className="mt-1 flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => addServicio(i)}
+                                className="inline-flex items-center gap-1 text-[11px] text-amber-600 hover:text-amber-700"
+                              >
+                                <Plus size={12} /> Otro
+                              </button>
+                              {occ > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => removeServicio(i)}
+                                  className="inline-flex items-center gap-1 text-[11px] text-gray-400 hover:text-red-600"
+                                >
+                                  <Trash2 size={12} /> Quitar
+                                </button>
+                              )}
+                            </div>
+                          </td>
                           <td className="py-2 px-2">
                             {row.servicio === 'Alineación' ? (
                               <div className="flex gap-1">
@@ -1145,7 +1354,8 @@ export default function LubricentrosPage() {
                             />
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
@@ -1272,17 +1482,22 @@ export default function LubricentrosPage() {
           {/* ---------- ALERTAS ---------- */}
           {tab === 'alertas' && (
             <div className="space-y-5">
-              {/* Legend */}
-              <div className="flex flex-wrap items-center gap-4 text-xs text-gray-500">
-                <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-red-500" /> Vencido</span>
-                <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-amber-500" /> Próximo mes</span>
-                <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-emerald-500" /> Al día</span>
+              {/* City scope + legend */}
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div className="flex flex-wrap items-center gap-4 text-xs text-gray-500">
+                  <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-red-500" /> Vencido</span>
+                  <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-amber-500" /> Próximo mes</span>
+                  <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-emerald-500" /> Al día</span>
+                </div>
+                {citySelector}
               </div>
 
               <div className="text-sm text-gray-500">
                 {loadingAlertas
                   ? 'Cargando...'
-                  : `${alertasTotal} ${alertasTotal === 1 ? 'orden' : 'órdenes'} con próximo cambio`}
+                  : `${alertasTotal} ${alertasTotal === 1 ? 'orden' : 'órdenes'} con próximo cambio${
+                      ciudadFiltro ? ` · ${ciudadFiltro}` : ''
+                    }`}
               </div>
 
               {alertas.length === 0 && !loadingAlertas ? (
@@ -1314,6 +1529,11 @@ export default function LubricentrosPage() {
                             {o.placa && (
                               <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
                                 {o.placa}
+                              </span>
+                            )}
+                            {!ciudadFiltro && o.ciudad && (
+                              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-sky-50 text-sky-700 border border-sky-100">
+                                <MapPin className="h-3 w-3" /> {o.ciudad}
                               </span>
                             )}
                             {llamado && (
@@ -1379,10 +1599,15 @@ export default function LubricentrosPage() {
           {/* ---------- REVISIONES PROGRAMADAS ---------- */}
           {tab === 'revisiones' && (
             <div className="space-y-5">
-              <div className="text-sm text-gray-500">
-                {loadingRevisiones
-                  ? 'Cargando...'
-                  : `${revisionesTotal} ${revisionesTotal === 1 ? 'revisión programada' : 'revisiones programadas'}`}
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div className="text-sm text-gray-500">
+                  {loadingRevisiones
+                    ? 'Cargando...'
+                    : `${revisionesTotal} ${revisionesTotal === 1 ? 'revisión programada' : 'revisiones programadas'}${
+                        ciudadFiltro ? ` · ${ciudadFiltro}` : ''
+                      }`}
+                </div>
+                {citySelector}
               </div>
 
               {revisiones.length === 0 && !loadingRevisiones ? (
@@ -1406,6 +1631,11 @@ export default function LubricentrosPage() {
                           {o.placa && (
                             <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700">
                               {o.placa}
+                            </span>
+                          )}
+                          {!ciudadFiltro && o.ciudad && (
+                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-sky-50 text-sky-700 border border-sky-100">
+                              <MapPin className="h-3 w-3" /> {o.ciudad}
                             </span>
                           )}
                         </div>
@@ -1495,6 +1725,7 @@ export default function LubricentrosPage() {
                 ['Factura No.', detail.factura_no],
                 ['Forma de pago', detail.forma_pago],
                 ['Asesor', detail.asesor_servicio],
+                ['Ciudad', detail.ciudad || ''],
                 ['Nombre conductor', detail.nombre],
                 ['Cédula / NIT', detail.cedula_nit],
                 ['Cumpleaños', detail.fecha_cumpleanos],
@@ -1560,6 +1791,15 @@ export default function LubricentrosPage() {
             </div>
 
             <div className="mt-6 flex flex-wrap justify-end gap-3">
+              {detail.placa && (
+                <button
+                  onClick={() => openHistorial(detail.placa)}
+                  className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white border border-gray-300 text-gray-700 text-sm font-medium hover:bg-gray-50 transition-colors"
+                >
+                  <History size={16} />
+                  Historial del vehículo
+                </button>
+              )}
               <button
                 onClick={() => prefillNewOrder(detail)}
                 className="inline-flex items-center gap-2 px-5 py-2.5 rounded-xl bg-white border border-amber-300 text-amber-700 text-sm font-medium hover:bg-amber-50 transition-colors"
@@ -1598,10 +1838,30 @@ export default function LubricentrosPage() {
             </button>
 
             <h2 className="text-lg font-bold text-gray-900 mb-1">Gestionar alerta</h2>
-            <p className="text-sm text-gray-700 mb-5">
+            <p className="text-sm text-gray-700 mb-4">
               {gestionTarget.orden_no ? `Orden ${gestionTarget.orden_no} · ` : ''}
               {[gestionTarget.nombre, gestionTarget.placa].filter(Boolean).join(' · ')}
             </p>
+
+            {/* WhatsApp the customer a formal reminder. Hidden when the stored
+                phone can't be normalized to a valid Colombian mobile. */}
+            {(() => {
+              const wa = buildWhatsappLink(gestionTarget);
+              return wa ? (
+                <a
+                  href={wa}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="mb-4 w-full inline-flex items-center justify-center gap-2 px-4 py-2.5 rounded-xl bg-[#25D366] text-white text-sm font-semibold hover:bg-[#1da851] transition-colors"
+                >
+                  <MessageCircle size={18} /> Enviar recordatorio por WhatsApp
+                </a>
+              ) : (
+                <p className="mb-4 text-xs text-gray-400">
+                  Sin celular válido para WhatsApp (se requiere un móvil de 10 dígitos).
+                </p>
+              );
+            })()}
 
             <div className="space-y-3">
               {/* Called, rejected — choose the day to be reminded again */}
@@ -1678,6 +1938,100 @@ export default function LubricentrosPage() {
                 </div>
               </button>
             </div>
+          </div>
+        </div>
+      )}
+
+      {/* Vehicle history modal — full service timeline for one plate */}
+      {historialPlaca && (
+        <div
+          className="fixed inset-0 bg-black/60 flex items-center justify-center z-[65] px-4 backdrop-blur-sm"
+          onClick={() => setHistorialPlaca(null)}
+        >
+          <div
+            className="bg-white rounded-2xl p-6 max-w-2xl w-full shadow-xl relative border border-gray-100 max-h-[85vh] overflow-y-auto"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <button
+              onClick={() => setHistorialPlaca(null)}
+              className="absolute top-4 right-4 text-gray-400 hover:text-gray-600 p-1 rounded-full hover:bg-gray-100"
+              aria-label="Cerrar"
+            >
+              <X size={22} />
+            </button>
+
+            <h2 className="flex items-center gap-2 text-xl font-bold text-gray-900 mb-1">
+              <History size={20} className="text-amber-500" /> Historial del vehículo
+            </h2>
+            <p className="text-xs text-gray-400 mb-5">
+              Placa {historialPlaca}
+              {!loadingHistorial &&
+                ` · ${historial.length} ${historial.length === 1 ? 'orden' : 'órdenes'}`}
+            </p>
+
+            {loadingHistorial ? (
+              <p className="py-10 text-center text-sm text-gray-400">Cargando historial...</p>
+            ) : historial.length === 0 ? (
+              <p className="py-10 text-center text-sm text-gray-400">
+                No hay órdenes registradas para esta placa.
+              </p>
+            ) : (
+              <ol className="relative border-l border-gray-200 ml-2 space-y-5">
+                {historial.map((h) => {
+                  const servicios = (h.servicios || []).filter(
+                    (s) => s.referencia || s.unidad || s.valor_unitario || s.subtotal,
+                  );
+                  return (
+                    <li key={h._id} className="ml-4">
+                      <span className="absolute -left-1.5 mt-1.5 h-3 w-3 rounded-full bg-amber-400 border border-white" />
+                      <button
+                        onClick={() => {
+                          setHistorialPlaca(null);
+                          setDetail(h);
+                        }}
+                        className="text-left w-full rounded-xl border border-gray-100 bg-gray-50 hover:border-amber-300 hover:bg-amber-50/40 transition-colors p-3"
+                      >
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <span className="font-semibold text-gray-900 text-sm">
+                            {h.orden_no ? `Orden ${h.orden_no}` : 'Orden'}
+                          </span>
+                          <span className="text-xs text-gray-500 flex items-center gap-1">
+                            <Calendar className="h-3 w-3" />
+                            {h.created_at ? formatDate(h.created_at) : '—'}
+                          </span>
+                        </div>
+                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-600">
+                          {h.km_actual && (
+                            <span>
+                              {new Intl.NumberFormat('es-CO').format(parseInt(h.km_actual, 10) || 0)} km
+                            </span>
+                          )}
+                          {h.ciudad && (
+                            <span className="flex items-center gap-1">
+                              <MapPin className="h-3 w-3" />
+                              {h.ciudad}
+                            </span>
+                          )}
+                          {h.created_by_nombre && <span>· {h.created_by_nombre}</span>}
+                          {h.total && (
+                            <span className="text-gray-800 font-medium">
+                              {formatMoney(parseInt(h.total, 10) || 0)}
+                            </span>
+                          )}
+                        </div>
+                        {servicios.length > 0 && (
+                          <p className="mt-1 text-xs text-gray-500 line-clamp-2">
+                            {servicios
+                              .map((s) => [s.servicio, s.referencia].filter(Boolean).join(': '))
+                              .join(' · ')}
+                          </p>
+                        )}
+                      </button>
+                    </li>
+                  );
+                })}
+              </ol>
+            )}
           </div>
         </div>
       )}

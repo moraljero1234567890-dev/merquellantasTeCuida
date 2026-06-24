@@ -127,6 +127,7 @@ function normalizeServicios(body: { servicios?: unknown }): ServicioLinea[] {
 function buildSearchBlob(doc: Record<string, unknown>, servicios: ServicioLinea[]): string {
   const parts: string[] = [];
   for (const f of TEXT_FIELDS) parts.push(clean(doc[f]));
+  parts.push(clean(doc.ciudad));
   for (const s of servicios) {
     parts.push(s.servicio, s.referencia, s.unidad, s.valor_unitario, s.subtotal);
   }
@@ -322,15 +323,44 @@ export async function GET(req: NextRequest) {
     return NextResponse.json([]);
   }
 
+  // Distinct cities seen across orders — feeds the city filter dropdown on the
+  // alerts/revisiones views. Empty/missing cities are excluded.
+  if (searchParams.get('ciudades') === 'true') {
+    const raw = await db.collection(COLLECTION).distinct('ciudad');
+    const ciudades = raw
+      .map((c) => clean(c))
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b, 'es'));
+    return NextResponse.json({ ciudades });
+  }
+
+  // Vehicle history: every order ever recorded for a plate, newest first. Used
+  // by the "Historial del vehículo" view to show the full service timeline.
+  const historial = (searchParams.get('historial') || '').trim();
+  if (historial) {
+    const results = await db
+      .collection(COLLECTION)
+      .find({ placa: historial.toUpperCase() })
+      .sort({ created_at: -1 })
+      .limit(200)
+      .toArray();
+    return NextResponse.json({ results });
+  }
+
+  // Optional city scope shared by the alerts and revisiones lists. When a city
+  // is passed, only that shop's orders are returned; otherwise all are shown.
+  const ciudadFilter = (searchParams.get('ciudad') || '').trim();
+
   // Alerts view: orders with a computed next-change date that haven't been
   // closed/scheduled away, sorted ascending (most overdue first) and paginated.
   if (searchParams.get('alertas') === 'true') {
     const page = Math.max(1, parseInt(searchParams.get('page') || '1') || 1);
     const pageSize = Math.max(1, Math.min(parseInt(searchParams.get('pageSize') || '20') || 20, 100));
-    const filter = {
+    const filter: Record<string, unknown> = {
       proximo_cambio_fecha: { $ne: null },
       gestion_tipo: { $nin: GESTION_HIDDEN_FROM_ALERTAS },
     };
+    if (ciudadFilter) filter.ciudad = ciudadFilter;
 
     const total = await db.collection(COLLECTION).countDocuments(filter);
     const results = await db
@@ -349,7 +379,8 @@ export async function GET(req: NextRequest) {
   if (searchParams.get('revisiones') === 'true') {
     const page = Math.max(1, parseInt(searchParams.get('page') || '1') || 1);
     const pageSize = Math.max(1, Math.min(parseInt(searchParams.get('pageSize') || '20') || 20, 100));
-    const filter = { gestion_tipo: 'revision_programada' };
+    const filter: Record<string, unknown> = { gestion_tipo: 'revision_programada' };
+    if (ciudadFilter) filter.ciudad = ciudadFilter;
 
     const total = await db.collection(COLLECTION).countDocuments(filter);
     const results = await db
@@ -428,6 +459,9 @@ export async function POST(req: NextRequest) {
     doc.proximo_cambio_meses as string,
     createdAt,
   );
+  // Location stamp: the order belongs to the shop/city the creating staff
+  // member operates in. Used to scope the alerts/revisiones lists by city.
+  doc.ciudad = clean(session.user.ciudad);
   doc._search = buildSearchBlob(doc, servicios);
   doc.created_by = session.user.id;
   doc.created_by_nombre = session.user.nombre || null;
@@ -494,6 +528,11 @@ export async function PUT(req: NextRequest) {
   update.total = String(totals.total);
   const fallbackBase = existing.created_at instanceof Date ? existing.created_at : new Date();
 
+  // The order keeps the city it was created in — editing never moves it
+  // between shops. Backfill from the editor's city for legacy orders that
+  // predate the field.
+  update.ciudad = clean(existing.ciudad) || clean(session.user.ciudad);
+
   update.servicios = servicios;
   update.proximo_cambio_fecha = computeProximoCambioFecha(
     update.fecha as string,
@@ -503,6 +542,7 @@ export async function PUT(req: NextRequest) {
   update._search = buildSearchBlob(update, servicios);
   update.updated_at = new Date();
   update.updated_by = session.user.id;
+  update.updated_by_nombre = session.user.nombre || null;
 
   await db.collection(COLLECTION).updateOne({ _id: new ObjectId(id) }, { $set: update });
 

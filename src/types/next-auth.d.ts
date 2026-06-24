@@ -10,6 +10,7 @@ declare module 'next-auth' {
       nombre: string;
       rol: string;
       cedula: string;
+      ciudad?: string | null;
     };
     accessToken?: string;
   }
@@ -21,6 +22,7 @@ declare module 'next-auth/jwt' {
     nombre?: string;
     rol?: string;
     cedula?: string;
+    ciudad?: string | null;
     accessToken?: string;
   }
 }
