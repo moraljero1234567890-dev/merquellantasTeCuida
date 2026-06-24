@@ -323,17 +323,6 @@ export async function GET(req: NextRequest) {
     return NextResponse.json([]);
   }
 
-  // Distinct cities seen across orders — feeds the city filter dropdown on the
-  // alerts/revisiones views. Empty/missing cities are excluded.
-  if (searchParams.get('ciudades') === 'true') {
-    const raw = await db.collection(COLLECTION).distinct('ciudad');
-    const ciudades = raw
-      .map((c) => clean(c))
-      .filter(Boolean)
-      .sort((a, b) => a.localeCompare(b, 'es'));
-    return NextResponse.json({ ciudades });
-  }
-
   // Vehicle history: every order ever recorded for a plate, newest first. Used
   // by the "Historial del vehículo" view to show the full service timeline.
   const historial = (searchParams.get('historial') || '').trim();
@@ -347,9 +336,15 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ results });
   }
 
-  // Optional city scope shared by the alerts and revisiones lists. When a city
-  // is passed, only that shop's orders are returned; otherwise all are shown.
-  const ciudadFilter = (searchParams.get('ciudad') || '').trim();
+  // City scope for the alerts and revisiones lists: a user only ever sees the
+  // orders of the city they belong to, so the shops don't mix. Admins are the
+  // exception — they oversee every city. The scope is taken from the session,
+  // never trusted from the client, so it can't be bypassed. Search stays global
+  // (any plate is findable). A non-admin with no city set sees nothing here.
+  const isAdmin = session.user.rol === 'admin';
+  const applyCityScope = (filter: Record<string, unknown>) => {
+    if (!isAdmin) filter.ciudad = clean(session.user.ciudad);
+  };
 
   // Alerts view: orders with a computed next-change date that haven't been
   // closed/scheduled away, sorted ascending (most overdue first) and paginated.
@@ -360,7 +355,7 @@ export async function GET(req: NextRequest) {
       proximo_cambio_fecha: { $ne: null },
       gestion_tipo: { $nin: GESTION_HIDDEN_FROM_ALERTAS },
     };
-    if (ciudadFilter) filter.ciudad = ciudadFilter;
+    applyCityScope(filter);
 
     const total = await db.collection(COLLECTION).countDocuments(filter);
     const results = await db
@@ -380,7 +375,7 @@ export async function GET(req: NextRequest) {
     const page = Math.max(1, parseInt(searchParams.get('page') || '1') || 1);
     const pageSize = Math.max(1, Math.min(parseInt(searchParams.get('pageSize') || '20') || 20, 100));
     const filter: Record<string, unknown> = { gestion_tipo: 'revision_programada' };
-    if (ciudadFilter) filter.ciudad = ciudadFilter;
+    applyCityScope(filter);
 
     const total = await db.collection(COLLECTION).countDocuments(filter);
     const results = await db

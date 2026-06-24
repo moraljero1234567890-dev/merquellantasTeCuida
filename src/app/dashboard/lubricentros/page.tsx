@@ -451,7 +451,7 @@ function OrderActions({ id }: { id: string }) {
 }
 
 export default function LubricentrosPage() {
-  const { data: session, status } = useSession();
+  const { data: session } = useSession();
   const [tab, setTab] = useState<'nueva' | 'buscar' | 'alertas' | 'revisiones'>('nueva');
 
   // ---- Form state ----
@@ -770,57 +770,16 @@ export default function LubricentrosPage() {
   }, [query, tab, runSearch]);
 
   // ---- City scope (alerts + revisiones) ----
-  // A bunch of shops share this app, so the alert/revisión lists are scoped to a
-  // single city. Defaults to the logged-in staff member's city; '' = all cities.
-  const [ciudadFiltro, setCiudadFiltro] = useState<string>('');
-  const [ciudades, setCiudades] = useState<string[]>([]);
-  const [ciudadInit, setCiudadInit] = useState(false);
-
-  // Seed the filter with the user's own city once the session is known.
-  useEffect(() => {
-    if (ciudadInit || status === 'loading') return;
-    const c = session?.user?.ciudad;
-    if (c) setCiudadFiltro(c);
-    setCiudadInit(true);
-  }, [session, status, ciudadInit]);
-
-  // Load the distinct cities seen across orders for the filter dropdown.
-  useEffect(() => {
-    if (!session) return;
-    (async () => {
-      try {
-        const res = await fetch('/api/lubricentros?ciudades=true');
-        if (res.ok) {
-          const d = await res.json();
-          setCiudades(Array.isArray(d.ciudades) ? d.ciudades : []);
-        }
-      } catch {
-        // ignore
-      }
-    })();
-  }, [session]);
-
-  // The user's own city is always offered even before any order exists for it.
-  const ciudadOptions = Array.from(
-    new Set([...(session?.user?.ciudad ? [session.user.ciudad] : []), ...ciudades]),
-  ).sort((a, b) => a.localeCompare(b, 'es'));
-
-  // Shared city-scope dropdown for the alerts and revisiones lists.
-  const citySelector = (
-    <div className="flex items-center gap-2">
+  // The alert/revisión lists are locked to the city the logged-in user belongs
+  // to so the shops don't mix — there is no picker. Admins oversee every city.
+  // The server enforces the same rule; this badge just shows the active scope.
+  // (Search stays global, so any plate is still findable from there.)
+  const isAdmin = session?.user?.rol === 'admin';
+  const scopeCiudad = session?.user?.ciudad || '';
+  const scopeBadge = (
+    <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-sm text-gray-600">
       <MapPin className="h-4 w-4 text-gray-400" />
-      <select
-        value={ciudadFiltro}
-        onChange={(e) => setCiudadFiltro(e.target.value)}
-        className="rounded-lg border border-gray-300 bg-white py-2 px-3 text-sm text-gray-900 focus:ring-amber-500 focus:border-amber-500"
-      >
-        <option value="">Todas las ciudades</option>
-        {ciudadOptions.map((c) => (
-          <option key={c} value={c}>
-            {c}
-          </option>
-        ))}
-      </select>
+      {isAdmin ? 'Todas las ciudades' : scopeCiudad || 'Sin ciudad asignada'}
     </div>
   );
 
@@ -836,8 +795,8 @@ export default function LubricentrosPage() {
       if (!session) return;
       setLoadingAlertas(true);
       try {
-        const cq = ciudadFiltro ? `&ciudad=${encodeURIComponent(ciudadFiltro)}` : '';
-        const res = await fetch(`/api/lubricentros?alertas=true&page=${page}&pageSize=${ALERTAS_PAGE_SIZE}${cq}`);
+        // City scope is derived server-side from the session — no param needed.
+        const res = await fetch(`/api/lubricentros?alertas=true&page=${page}&pageSize=${ALERTAS_PAGE_SIZE}`);
         if (res.ok) {
           const data = await res.json();
           setAlertas(data.results || []);
@@ -849,7 +808,7 @@ export default function LubricentrosPage() {
         setLoadingAlertas(false);
       }
     },
-    [session, ciudadFiltro],
+    [session],
   );
 
   useEffect(() => {
@@ -868,8 +827,8 @@ export default function LubricentrosPage() {
       if (!session) return;
       setLoadingRevisiones(true);
       try {
-        const cq = ciudadFiltro ? `&ciudad=${encodeURIComponent(ciudadFiltro)}` : '';
-        const res = await fetch(`/api/lubricentros?revisiones=true&page=${page}&pageSize=${ALERTAS_PAGE_SIZE}${cq}`);
+        // City scope is derived server-side from the session — no param needed.
+        const res = await fetch(`/api/lubricentros?revisiones=true&page=${page}&pageSize=${ALERTAS_PAGE_SIZE}`);
         if (res.ok) {
           const data = await res.json();
           setRevisiones(data.results || []);
@@ -881,18 +840,12 @@ export default function LubricentrosPage() {
         setLoadingRevisiones(false);
       }
     },
-    [session, ciudadFiltro],
+    [session],
   );
 
   useEffect(() => {
     if (tab === 'revisiones') fetchRevisiones(revisionesPage);
   }, [tab, revisionesPage, fetchRevisiones]);
-
-  // Switching cities resets both lists to their first page.
-  useEffect(() => {
-    setAlertasPage(1);
-    setRevisionesPage(1);
-  }, [ciudadFiltro]);
 
   // ---- Manage ("gestionar") an alert ----
   const [gestionTarget, setGestionTarget] = useState<Orden | null>(null);
@@ -1489,15 +1442,13 @@ export default function LubricentrosPage() {
                   <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-amber-500" /> Próximo mes</span>
                   <span className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full bg-emerald-500" /> Al día</span>
                 </div>
-                {citySelector}
+                {scopeBadge}
               </div>
 
               <div className="text-sm text-gray-500">
                 {loadingAlertas
                   ? 'Cargando...'
-                  : `${alertasTotal} ${alertasTotal === 1 ? 'orden' : 'órdenes'} con próximo cambio${
-                      ciudadFiltro ? ` · ${ciudadFiltro}` : ''
-                    }`}
+                  : `${alertasTotal} ${alertasTotal === 1 ? 'orden' : 'órdenes'} con próximo cambio`}
               </div>
 
               {alertas.length === 0 && !loadingAlertas ? (
@@ -1531,7 +1482,7 @@ export default function LubricentrosPage() {
                                 {o.placa}
                               </span>
                             )}
-                            {!ciudadFiltro && o.ciudad && (
+                            {isAdmin && o.ciudad && (
                               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-sky-50 text-sky-700 border border-sky-100">
                                 <MapPin className="h-3 w-3" /> {o.ciudad}
                               </span>
@@ -1603,11 +1554,9 @@ export default function LubricentrosPage() {
                 <div className="text-sm text-gray-500">
                   {loadingRevisiones
                     ? 'Cargando...'
-                    : `${revisionesTotal} ${revisionesTotal === 1 ? 'revisión programada' : 'revisiones programadas'}${
-                        ciudadFiltro ? ` · ${ciudadFiltro}` : ''
-                      }`}
+                    : `${revisionesTotal} ${revisionesTotal === 1 ? 'revisión programada' : 'revisiones programadas'}`}
                 </div>
-                {citySelector}
+                {scopeBadge}
               </div>
 
               {revisiones.length === 0 && !loadingRevisiones ? (
@@ -1633,7 +1582,7 @@ export default function LubricentrosPage() {
                               {o.placa}
                             </span>
                           )}
-                          {!ciudadFiltro && o.ciudad && (
+                          {isAdmin && o.ciudad && (
                             <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-sky-50 text-sky-700 border border-sky-100">
                               <MapPin className="h-3 w-3" /> {o.ciudad}
                             </span>
