@@ -323,6 +323,17 @@ export async function GET(req: NextRequest) {
     return NextResponse.json([]);
   }
 
+  // Distinct cities seen across orders — feeds the admin-only city filter on the
+  // alerts/revisiones views. Empty/missing cities are excluded.
+  if (searchParams.get('ciudades') === 'true') {
+    const raw = await db.collection(COLLECTION).distinct('ciudad');
+    const ciudades = raw
+      .map((c) => clean(c))
+      .filter(Boolean)
+      .sort((a, b) => a.localeCompare(b, 'es'));
+    return NextResponse.json({ ciudades });
+  }
+
   // Vehicle history: every order ever recorded for a plate, newest first. Used
   // by the "Historial del vehículo" view to show the full service timeline.
   const historial = (searchParams.get('historial') || '').trim();
@@ -338,12 +349,19 @@ export async function GET(req: NextRequest) {
 
   // City scope for the alerts and revisiones lists: a user only ever sees the
   // orders of the city they belong to, so the shops don't mix. Admins are the
-  // exception — they oversee every city. The scope is taken from the session,
-  // never trusted from the client, so it can't be bypassed. Search stays global
-  // (any plate is findable). A non-admin with no city set sees nothing here.
+  // exception — they oversee every city and MAY narrow to one via ?ciudad=.
+  // The scope is taken from the session (never trusted from the client) for
+  // regular users, so it can't be bypassed. Search stays global (any plate is
+  // findable). A non-admin with no city set sees nothing here.
   const isAdmin = session.user.rol === 'admin';
   const applyCityScope = (filter: Record<string, unknown>) => {
-    if (!isAdmin) filter.ciudad = clean(session.user.ciudad);
+    if (!isAdmin) {
+      filter.ciudad = clean(session.user.ciudad);
+      return;
+    }
+    // Admin: optional city narrowing; no param = every city.
+    const c = (searchParams.get('ciudad') || '').trim();
+    if (c) filter.ciudad = c;
   };
 
   // Alerts view: orders with a computed next-change date that haven't been

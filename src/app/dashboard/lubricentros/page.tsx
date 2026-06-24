@@ -450,6 +450,82 @@ function OrderActions({ id }: { id: string }) {
   );
 }
 
+// Local date-time + money formatters for the vehicle-history timeline, which is
+// rendered by a standalone component (search results + the history modal).
+function fmtDateTime(date: string): string {
+  return new Intl.DateTimeFormat('es-CO', {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  }).format(new Date(date));
+}
+function fmtMoney(n: number): string {
+  return `$ ${new Intl.NumberFormat('es-CO').format(n)}`;
+}
+
+// Does this query look like a Colombian plate? Cars are 3 letters + 3 digits
+// (ABC123); motorcycles 3 letters + 2 digits + 1 letter (ABC12D). We strip
+// spaces/dashes first so "abc-123" and "abc 123" also match.
+function looksLikePlate(q: string): boolean {
+  const s = q.trim().toUpperCase().replace(/[^A-Z0-9]/g, '');
+  return /^[A-Z]{3}[0-9]{2}[0-9A-Z]$/.test(s);
+}
+
+// Chronological list of a vehicle's orders (newest first) with timestamp, city,
+// KM, who recorded it, the services and the total. Each entry opens the order.
+function VehicleTimeline({ orders, onSelect }: { orders: Orden[]; onSelect: (o: Orden) => void }) {
+  return (
+    <ol className="relative border-l border-gray-200 ml-2 space-y-5">
+      {orders.map((h) => {
+        const servicios = (h.servicios || []).filter(
+          (s) => s.referencia || s.unidad || s.valor_unitario || s.subtotal,
+        );
+        return (
+          <li key={h._id} className="ml-4">
+            <span className="absolute -left-1.5 mt-1.5 h-3 w-3 rounded-full bg-amber-400 border border-white" />
+            <button
+              onClick={() => onSelect(h)}
+              className="text-left w-full rounded-xl border border-gray-100 bg-gray-50 hover:border-amber-300 hover:bg-amber-50/40 transition-colors p-3"
+            >
+              <div className="flex items-center justify-between gap-2 flex-wrap">
+                <span className="font-semibold text-gray-900 text-sm">
+                  {h.orden_no ? `Orden ${h.orden_no}` : 'Orden'}
+                </span>
+                <span className="text-xs text-gray-500 flex items-center gap-1">
+                  <Calendar className="h-3 w-3" />
+                  {h.created_at ? fmtDateTime(h.created_at) : '—'}
+                </span>
+              </div>
+              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-600">
+                {h.km_actual && (
+                  <span>{new Intl.NumberFormat('es-CO').format(parseInt(h.km_actual, 10) || 0)} km</span>
+                )}
+                {h.ciudad && (
+                  <span className="flex items-center gap-1">
+                    <MapPin className="h-3 w-3" />
+                    {h.ciudad}
+                  </span>
+                )}
+                {h.created_by_nombre && <span>· {h.created_by_nombre}</span>}
+                {h.total && (
+                  <span className="text-gray-800 font-medium">{fmtMoney(parseInt(h.total, 10) || 0)}</span>
+                )}
+              </div>
+              {servicios.length > 0 && (
+                <p className="mt-1 text-xs text-gray-500 line-clamp-2">
+                  {servicios.map((s) => [s.servicio, s.referencia].filter(Boolean).join(': ')).join(' · ')}
+                </p>
+              )}
+            </button>
+          </li>
+        );
+      })}
+    </ol>
+  );
+}
+
 export default function LubricentrosPage() {
   const { data: session } = useSession();
   const [tab, setTab] = useState<'nueva' | 'buscar' | 'alertas' | 'revisiones'>('nueva');
@@ -770,16 +846,51 @@ export default function LubricentrosPage() {
   }, [query, tab, runSearch]);
 
   // ---- City scope (alerts + revisiones) ----
-  // The alert/revisión lists are locked to the city the logged-in user belongs
-  // to so the shops don't mix — there is no picker. Admins oversee every city.
-  // The server enforces the same rule; this badge just shows the active scope.
-  // (Search stays global, so any plate is still findable from there.)
+  // Regular users are locked to their own city so the shops don't mix — no
+  // picker, the server enforces it. Admins oversee every city and can narrow to
+  // one with the dropdown ('' = all). (Search stays global either way.)
   const isAdmin = session?.user?.rol === 'admin';
   const scopeCiudad = session?.user?.ciudad || '';
-  const scopeBadge = (
+  const [ciudadFiltro, setCiudadFiltro] = useState<string>(''); // admin-only; '' = all
+  const [ciudades, setCiudades] = useState<string[]>([]);
+
+  // Load the distinct cities for the admin filter dropdown.
+  useEffect(() => {
+    if (!isAdmin) return;
+    (async () => {
+      try {
+        const res = await fetch('/api/lubricentros?ciudades=true');
+        if (res.ok) {
+          const d = await res.json();
+          setCiudades(Array.isArray(d.ciudades) ? d.ciudades : []);
+        }
+      } catch {
+        // ignore
+      }
+    })();
+  }, [isAdmin]);
+
+  // Admins get a city dropdown; everyone else a read-only badge of their city.
+  const scopeBadge = isAdmin ? (
+    <div className="flex items-center gap-2">
+      <MapPin className="h-4 w-4 text-gray-400" />
+      <select
+        value={ciudadFiltro}
+        onChange={(e) => setCiudadFiltro(e.target.value)}
+        className="rounded-lg border border-gray-300 bg-white py-2 px-3 text-sm text-gray-900 focus:ring-amber-500 focus:border-amber-500"
+      >
+        <option value="">Todas las ciudades</option>
+        {ciudades.map((c) => (
+          <option key={c} value={c}>
+            {c}
+          </option>
+        ))}
+      </select>
+    </div>
+  ) : (
     <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-gray-50 border border-gray-200 text-sm text-gray-600">
       <MapPin className="h-4 w-4 text-gray-400" />
-      {isAdmin ? 'Todas las ciudades' : scopeCiudad || 'Sin ciudad asignada'}
+      {scopeCiudad || 'Sin ciudad asignada'}
     </div>
   );
 
@@ -795,8 +906,10 @@ export default function LubricentrosPage() {
       if (!session) return;
       setLoadingAlertas(true);
       try {
-        // City scope is derived server-side from the session — no param needed.
-        const res = await fetch(`/api/lubricentros?alertas=true&page=${page}&pageSize=${ALERTAS_PAGE_SIZE}`);
+        // Non-admins are scoped server-side from the session; admins may narrow
+        // by city via the dropdown (ignored by the server for regular users).
+        const cq = isAdmin && ciudadFiltro ? `&ciudad=${encodeURIComponent(ciudadFiltro)}` : '';
+        const res = await fetch(`/api/lubricentros?alertas=true&page=${page}&pageSize=${ALERTAS_PAGE_SIZE}${cq}`);
         if (res.ok) {
           const data = await res.json();
           setAlertas(data.results || []);
@@ -808,7 +921,7 @@ export default function LubricentrosPage() {
         setLoadingAlertas(false);
       }
     },
-    [session],
+    [session, isAdmin, ciudadFiltro],
   );
 
   useEffect(() => {
@@ -827,8 +940,9 @@ export default function LubricentrosPage() {
       if (!session) return;
       setLoadingRevisiones(true);
       try {
-        // City scope is derived server-side from the session — no param needed.
-        const res = await fetch(`/api/lubricentros?revisiones=true&page=${page}&pageSize=${ALERTAS_PAGE_SIZE}`);
+        // Non-admins are scoped server-side; admins may narrow by city.
+        const cq = isAdmin && ciudadFiltro ? `&ciudad=${encodeURIComponent(ciudadFiltro)}` : '';
+        const res = await fetch(`/api/lubricentros?revisiones=true&page=${page}&pageSize=${ALERTAS_PAGE_SIZE}${cq}`);
         if (res.ok) {
           const data = await res.json();
           setRevisiones(data.results || []);
@@ -840,12 +954,18 @@ export default function LubricentrosPage() {
         setLoadingRevisiones(false);
       }
     },
-    [session],
+    [session, isAdmin, ciudadFiltro],
   );
 
   useEffect(() => {
     if (tab === 'revisiones') fetchRevisiones(revisionesPage);
   }, [tab, revisionesPage, fetchRevisiones]);
+
+  // When the admin switches city, jump both lists back to their first page.
+  useEffect(() => {
+    setAlertasPage(1);
+    setRevisionesPage(1);
+  }, [ciudadFiltro]);
 
   // ---- Manage ("gestionar") an alert ----
   const [gestionTarget, setGestionTarget] = useState<Orden | null>(null);
@@ -979,6 +1099,22 @@ export default function LubricentrosPage() {
     const t = setTimeout(() => setSaveError(null), 4500);
     return () => clearTimeout(t);
   }, [saveError]);
+
+  // Plate search: when the query is a license plate, group the matching orders
+  // by vehicle and show each as a full history timeline (with timestamps, city
+  // and user stamps) instead of loose result cards. Results arrive newest-first.
+  const plateSearch = looksLikePlate(query);
+  const vehicleGroups: { placa: string; orders: Orden[] }[] = [];
+  if (plateSearch) {
+    const map = new Map<string, Orden[]>();
+    for (const o of results) {
+      const p = (o.placa || '').toUpperCase();
+      const list = map.get(p);
+      if (list) list.push(o);
+      else map.set(p, [o]);
+    }
+    for (const [placa, orders] of map) vehicleGroups.push({ placa, orders });
+  }
 
   return (
     <>
@@ -1390,7 +1526,9 @@ export default function LubricentrosPage() {
                 <span>
                   {loadingSearch
                     ? 'Buscando...'
-                    : `${results.length} ${results.length === 1 ? 'resultado' : 'resultados'}`}
+                    : plateSearch
+                      ? `${results.length} ${results.length === 1 ? 'orden' : 'órdenes'} · historial por vehículo`
+                      : `${results.length} ${results.length === 1 ? 'resultado' : 'resultados'}`}
                 </span>
               </div>
 
@@ -1398,6 +1536,41 @@ export default function LubricentrosPage() {
                 <div className="py-16 text-center text-gray-400 bg-white rounded-2xl border border-gray-100">
                   <ClipboardList className="h-10 w-10 mx-auto mb-2 opacity-50" />
                   <p className="text-sm">No se encontraron órdenes.</p>
+                </div>
+              ) : plateSearch ? (
+                // Plate search → one history card per vehicle (usually just one).
+                <div className="space-y-6">
+                  {vehicleGroups.map((g) => {
+                    const head = g.orders[0]; // newest order: latest vehicle/owner data
+                    return (
+                      <div key={g.placa} className="bg-white rounded-2xl border border-gray-100 shadow-sm p-5">
+                        <div className="flex items-center justify-between gap-3 mb-4 flex-wrap">
+                          <div className="flex items-center gap-3">
+                            <div className="w-11 h-11 rounded-xl bg-amber-100 flex items-center justify-center flex-shrink-0">
+                              <Car className="h-6 w-6 text-amber-600" />
+                            </div>
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2 flex-wrap">
+                                <span className="text-lg font-bold text-gray-900">{g.placa || 'Sin placa'}</span>
+                                {head.ciudad && (
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-sky-50 text-sky-700 border border-sky-100">
+                                    <MapPin className="h-3 w-3" /> {head.ciudad}
+                                  </span>
+                                )}
+                              </div>
+                              <p className="text-xs text-gray-500 truncate">
+                                {[head.marca, head.tipo, head.nombre].filter(Boolean).join(' · ') || '—'}
+                              </p>
+                            </div>
+                          </div>
+                          <span className="text-xs font-medium text-gray-500 whitespace-nowrap">
+                            {g.orders.length} {g.orders.length === 1 ? 'orden' : 'órdenes'}
+                          </span>
+                        </div>
+                        <VehicleTimeline orders={g.orders} onSelect={(o) => setDetail(o)} />
+                      </div>
+                    );
+                  })}
                 </div>
               ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1925,61 +2098,13 @@ export default function LubricentrosPage() {
                 No hay órdenes registradas para esta placa.
               </p>
             ) : (
-              <ol className="relative border-l border-gray-200 ml-2 space-y-5">
-                {historial.map((h) => {
-                  const servicios = (h.servicios || []).filter(
-                    (s) => s.referencia || s.unidad || s.valor_unitario || s.subtotal,
-                  );
-                  return (
-                    <li key={h._id} className="ml-4">
-                      <span className="absolute -left-1.5 mt-1.5 h-3 w-3 rounded-full bg-amber-400 border border-white" />
-                      <button
-                        onClick={() => {
-                          setHistorialPlaca(null);
-                          setDetail(h);
-                        }}
-                        className="text-left w-full rounded-xl border border-gray-100 bg-gray-50 hover:border-amber-300 hover:bg-amber-50/40 transition-colors p-3"
-                      >
-                        <div className="flex items-center justify-between gap-2 flex-wrap">
-                          <span className="font-semibold text-gray-900 text-sm">
-                            {h.orden_no ? `Orden ${h.orden_no}` : 'Orden'}
-                          </span>
-                          <span className="text-xs text-gray-500 flex items-center gap-1">
-                            <Calendar className="h-3 w-3" />
-                            {h.created_at ? formatDate(h.created_at) : '—'}
-                          </span>
-                        </div>
-                        <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-gray-600">
-                          {h.km_actual && (
-                            <span>
-                              {new Intl.NumberFormat('es-CO').format(parseInt(h.km_actual, 10) || 0)} km
-                            </span>
-                          )}
-                          {h.ciudad && (
-                            <span className="flex items-center gap-1">
-                              <MapPin className="h-3 w-3" />
-                              {h.ciudad}
-                            </span>
-                          )}
-                          {h.created_by_nombre && <span>· {h.created_by_nombre}</span>}
-                          {h.total && (
-                            <span className="text-gray-800 font-medium">
-                              {formatMoney(parseInt(h.total, 10) || 0)}
-                            </span>
-                          )}
-                        </div>
-                        {servicios.length > 0 && (
-                          <p className="mt-1 text-xs text-gray-500 line-clamp-2">
-                            {servicios
-                              .map((s) => [s.servicio, s.referencia].filter(Boolean).join(': '))
-                              .join(' · ')}
-                          </p>
-                        )}
-                      </button>
-                    </li>
-                  );
-                })}
-              </ol>
+              <VehicleTimeline
+                orders={historial}
+                onSelect={(o) => {
+                  setHistorialPlaca(null);
+                  setDetail(o);
+                }}
+              />
             )}
           </div>
         </div>
