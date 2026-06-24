@@ -407,18 +407,35 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ results, total, page, pageSize });
   }
 
+  // Full-text search (matches "anything"), newest first. Paginated by default
+  // so we never load the whole collection. ?all=true returns every match (capped
+  // at 500) — used for a plate search, where the result set is one vehicle's
+  // bounded history and we want the complete timeline on screen.
   const q = (searchParams.get('q') || '').trim();
-  const limit = Math.max(1, Math.min(parseInt(searchParams.get('limit') || '100') || 100, 500));
   const filter = q ? { _search: { $regex: escapeRegex(q.toLowerCase()) } } : {};
+  const total = await db.collection(COLLECTION).countDocuments(filter);
 
+  if (searchParams.get('all') === 'true') {
+    const results = await db
+      .collection(COLLECTION)
+      .find(filter)
+      .sort({ created_at: -1 })
+      .limit(500)
+      .toArray();
+    return NextResponse.json({ results, total, page: 1, pageSize: results.length });
+  }
+
+  const page = Math.max(1, parseInt(searchParams.get('page') || '1') || 1);
+  const pageSize = Math.max(1, Math.min(parseInt(searchParams.get('pageSize') || '20') || 20, 100));
   const results = await db
     .collection(COLLECTION)
     .find(filter)
     .sort({ created_at: -1 })
-    .limit(limit)
+    .skip((page - 1) * pageSize)
+    .limit(pageSize)
     .toArray();
 
-  return NextResponse.json(results);
+  return NextResponse.json({ results, total, page, pageSize });
 }
 
 // POST /api/lubricentros — create an order. Customer + vehicle fields required.

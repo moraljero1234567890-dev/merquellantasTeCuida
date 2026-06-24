@@ -804,7 +804,7 @@ export default function LubricentrosPage() {
       setActionsOrder({ id: savedId, ordenNo: data.orden_no || editingNo || '', edit: !!editing });
       resetForm();
       // Refresh search results and the next-number preview in the background.
-      runSearch(query);
+      runSearch(query, searchPage);
       if (!editing) fetchNextNo();
     } catch (err) {
       setSaveError(err instanceof Error ? err.message : 'Error al guardar');
@@ -817,18 +817,29 @@ export default function LubricentrosPage() {
   const [query, setQuery] = useState('');
   const [results, setResults] = useState<Orden[]>([]);
   const [loadingSearch, setLoadingSearch] = useState(false);
+  const [searchPage, setSearchPage] = useState(1);
+  const [searchTotal, setSearchTotal] = useState(0);
   const [detail, setDetail] = useState<Orden | null>(null);
+  const searchTotalPages = Math.max(1, Math.ceil(searchTotal / ALERTAS_PAGE_SIZE));
 
   const runSearch = useCallback(
-    async (q: string) => {
+    async (q: string, page: number) => {
       if (!session) return;
       setLoadingSearch(true);
       try {
-        const url = q.trim()
-          ? `/api/lubricentros?q=${encodeURIComponent(q.trim())}&limit=200`
-          : '/api/lubricentros?limit=200';
+        const term = q.trim();
+        const base = term ? `q=${encodeURIComponent(term)}&` : '';
+        // A plate search pulls the vehicle's full (bounded) history at once;
+        // any other search is paginated so we never load the whole collection.
+        const url = looksLikePlate(term)
+          ? `/api/lubricentros?${base}all=true`
+          : `/api/lubricentros?${base}page=${page}&pageSize=${ALERTAS_PAGE_SIZE}`;
         const res = await fetch(url);
-        if (res.ok) setResults(await res.json());
+        if (res.ok) {
+          const data = await res.json();
+          setResults(data.results || []);
+          setSearchTotal(data.total || 0);
+        }
       } catch {
         // ignore
       } finally {
@@ -838,10 +849,20 @@ export default function LubricentrosPage() {
     [session],
   );
 
+  // Jump to a search page (used by the pagination controls).
+  const goSearchPage = (p: number) => {
+    setSearchPage(p);
+    runSearch(query, p);
+  };
+
   // Debounced search as the user types (and initial load of recent orders).
+  // Every query change resets to the first page.
   useEffect(() => {
     if (tab !== 'buscar') return;
-    const t = setTimeout(() => runSearch(query), 300);
+    const t = setTimeout(() => {
+      setSearchPage(1);
+      runSearch(query, 1);
+    }, 300);
     return () => clearTimeout(t);
   }, [query, tab, runSearch]);
 
@@ -1528,7 +1549,7 @@ export default function LubricentrosPage() {
                     ? 'Buscando...'
                     : plateSearch
                       ? `${results.length} ${results.length === 1 ? 'orden' : 'órdenes'} · historial por vehículo`
-                      : `${results.length} ${results.length === 1 ? 'resultado' : 'resultados'}`}
+                      : `${searchTotal} ${searchTotal === 1 ? 'resultado' : 'resultados'}`}
                 </span>
               </div>
 
@@ -1600,6 +1621,29 @@ export default function LubricentrosPage() {
                       </p>
                     </button>
                   ))}
+                </div>
+              )}
+
+              {/* Pagination (general search only; plate search shows full history) */}
+              {!plateSearch && searchTotal > ALERTAS_PAGE_SIZE && (
+                <div className="flex items-center justify-center gap-3 pt-2">
+                  <button
+                    onClick={() => goSearchPage(Math.max(1, searchPage - 1))}
+                    disabled={searchPage <= 1 || loadingSearch}
+                    className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-white border border-gray-200 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    <ChevronLeft size={16} /> Anterior
+                  </button>
+                  <span className="text-sm text-gray-500">
+                    Página {searchPage} de {searchTotalPages}
+                  </span>
+                  <button
+                    onClick={() => goSearchPage(Math.min(searchTotalPages, searchPage + 1))}
+                    disabled={searchPage >= searchTotalPages || loadingSearch}
+                    className="inline-flex items-center gap-1 px-3 py-2 rounded-lg bg-white border border-gray-200 text-sm text-gray-600 hover:bg-gray-50 disabled:opacity-40 disabled:cursor-not-allowed"
+                  >
+                    Siguiente <ChevronRight size={16} />
+                  </button>
                 </div>
               )}
             </div>
