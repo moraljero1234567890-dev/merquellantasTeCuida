@@ -39,9 +39,15 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: 'Tipo de archivo no permitido' }, { status: 400 });
   }
 
-  // For calendar uploads, set an expiration date (2 days) for auto-cleanup
-  const isCalendar = folder === 'calendar';
-  const expiresAt = isCalendar ? new Date(Date.now() + 2 * 24 * 60 * 60 * 1000) : null;
+  // Auto-cleanup windows: calendar media lives 2 days, shop-followup photos
+  // live 2 weeks (the admin page also purges these on load). Everything else
+  // is kept indefinitely.
+  const expiresAt =
+    folder === 'calendar'
+      ? new Date(Date.now() + 2 * 24 * 60 * 60 * 1000)
+      : folder === 'shop-followup'
+        ? new Date(Date.now() + 14 * 24 * 60 * 60 * 1000)
+        : null;
 
   const db = await getDb();
   const bucket = new GridFSBucket(db, { bucketName: 'uploads' });
