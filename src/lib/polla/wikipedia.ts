@@ -426,19 +426,72 @@ async function parseGroupPage(letter: string): Promise<MatchDoc[]> {
   const start = wt.indexOf("==Matches==");
   if (start < 0) return [];
   const sliced = wt.slice(start);
-  const boxes = extractFootballBoxes(sliced);
-  return boxes
-    .map((fields, idx) => {
-      const matchday = Math.floor(idx / 2) + 1;
-      return toMatchDoc(fields, {
-        groupKey: letter,
-        matchday,
-        stage: "GROUP_STAGE",
-        stageLabel: "Fase de Grupos",
-        externalId: `G${letter}${idx + 1}`,
-      });
-    })
-    .filter((d): d is MatchDoc => d != null);
+
+  // Each match is wrapped in a `<section begin="F3" />…<section end="F3" />`
+  // marker whose number is the match's canonical, editor-maintained slot
+  // (F1/F2 = matchday 1, F3/F4 = matchday 2, F5/F6 = matchday 3). We key the
+  // match id + matchday off that number rather than the box's position in the
+  // page, because Wikipedia sometimes formats a notable match differently —
+  // e.g. transcluding it from its own article with `{{#lst:Article|F4}}`
+  // instead of an inline `{{#invoke:football box}}`. Position-based numbering
+  // silently shifts every later match (wrong id + wrong matchday) the moment
+  // one box is missing or reordered; section numbers stay stable.
+  const sectionRe = new RegExp(
+    `<section\\s+begin\\s*=\\s*"?${letter}(\\d+)"?\\s*/>`,
+    "g",
+  );
+  const markers: Array<{ num: number; index: number }> = [];
+  let sm: RegExpExecArray | null;
+  while ((sm = sectionRe.exec(sliced)) !== null) {
+    markers.push({ num: Number(sm[1]), index: sm.index });
+  }
+
+  // No section markers (older page format): fall back to positional parsing.
+  if (markers.length === 0) {
+    return extractFootballBoxes(sliced)
+      .map((fields, idx) =>
+        toMatchDoc(fields, {
+          groupKey: letter,
+          matchday: Math.floor(idx / 2) + 1,
+          stage: "GROUP_STAGE",
+          stageLabel: "Fase de Grupos",
+          externalId: `G${letter}${idx + 1}`,
+        }),
+      )
+      .filter((d): d is MatchDoc => d != null);
+  }
+
+  const out: MatchDoc[] = [];
+  for (let i = 0; i < markers.length; i++) {
+    const { num, index } = markers[i];
+    const segment = sliced.slice(index, markers[i + 1]?.index ?? sliced.length);
+
+    let fields = extractFootballBoxes(segment)[0] ?? null;
+    if (!fields) {
+      // Match transcluded from its own article: {{#lst:Some Article|F4}}.
+      const lst = /\{\{\s*#lst:\s*([^|}]+)\|/.exec(segment);
+      if (lst) {
+        try {
+          const subWt = await fetchWikitext(lst[1].trim());
+          fields = extractFootballBoxes(subWt)[0] ?? null;
+        } catch {
+          // Sub-article unavailable: skip. applyProviderResults preserves any
+          // existing doc for this id (and never downgrades a finished result).
+        }
+      }
+    }
+    if (!fields) continue;
+
+    const doc = toMatchDoc(fields, {
+      groupKey: letter,
+      matchday: Math.ceil(num / 2),
+      stage: "GROUP_STAGE",
+      stageLabel: "Fase de Grupos",
+      externalId: `G${letter}${num}`,
+    });
+    if (doc) out.push(doc);
+  }
+  return out;
 }
 
 async function parseKnockoutPage(): Promise<MatchDoc[]> {
