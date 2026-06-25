@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Menu, X, User2, Home, FileText, ChevronDown, LogOut, HelpCircle, Palmtree, HeartPlus, Landmark, GraduationCap, Store } from 'lucide-react';
+import { Menu, X, User2, Home, FileText, ChevronDown, LogOut, HelpCircle, Palmtree, HeartPlus, Landmark, GraduationCap } from 'lucide-react';
 import { useSession, signOut } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { clearPollaSession } from '@/lib/polla/session';
@@ -51,7 +51,6 @@ const DashboardNavbar = ({ activePage = 'home' }) => {
     { id: 'pqrsf', href: '/dashboard/pqrsf', icon: <HelpCircle size={18} />, label: 'PQRSF' },
     { id: 'fondo', href: '/dashboard/fondo', icon: <Landmark size={18} />, label: 'Fonalmerque' },
     { id: 'elearning', href: '/dashboard/elearning', icon: <GraduationCap size={18} />, label: 'E-Learning' },
-    { id: 'shop-followup', href: '/dashboard/shop-followup', icon: <Store size={18} />, label: 'Seguimiento' },
   ];
 
   const navItems = profile?.rol === 'externo'
