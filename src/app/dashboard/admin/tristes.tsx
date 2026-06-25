@@ -24,6 +24,9 @@ interface UserSummary {
   latest_at: string;
   checkin_count: number;
   consecutive_triste: number;
+  triste_count: number;
+  latest_triste_at: string | null;
+  latest_triste_note: string | null;
 }
 
 interface SadWorker {
@@ -31,7 +34,7 @@ interface SadWorker {
   name: string;
   position: string;
   department: string;
-  consecutiveSadDays: number;
+  sadCount: number;
   avatar: string;
   avatarColor: string;
   email: string;
@@ -77,19 +80,24 @@ export default function TristesCard() {
       const summaries = (data.userSummaries as UserSummary[]) || [];
 
       const workers: SadWorker[] = summaries
-        .filter((u) => u.consecutive_triste >= 3)
-        .sort((a, b) => b.consecutive_triste - a.consecutive_triste)
+        .filter((u) => u.triste_count > 0)
+        .sort(
+          (a, b) =>
+            b.triste_count - a.triste_count ||
+            new Date(b.latest_triste_at ?? b.latest_at).getTime() -
+              new Date(a.latest_triste_at ?? a.latest_at).getTime(),
+        )
         .map((u, i) => ({
           id: u.user_id || u.cedula || u.nombre,
           name: u.nombre || "Usuario sin nombre",
           position: u.cargo || "Sin cargo",
           department: u.departamento || u.area || "Sin departamento",
-          consecutiveSadDays: u.consecutive_triste,
+          sadCount: u.triste_count,
           avatar: avatarInitials(u.nombre || "NN"),
           avatarColor: avatarColor(i),
           email: u.email || "",
-          lastMoodDate: new Date(u.latest_at),
-          latestNote: u.latest_note,
+          lastMoodDate: new Date(u.latest_triste_at ?? u.latest_at),
+          latestNote: u.latest_triste_note ?? u.latest_note,
         }));
 
       setSadWorkers(workers);
@@ -160,7 +168,7 @@ export default function TristesCard() {
           <div className="text-center py-8">
             <CheckCircle className="h-12 w-12 text-green-400 mx-auto mb-3" />
             <p className="text-gray-500">
-              No hay trabajadores con 3+ días tristes consecutivos.
+              No hay trabajadores tristes por el momento.
             </p>
           </div>
         ) : (
@@ -183,7 +191,7 @@ export default function TristesCard() {
                 <div className="flex-shrink-0">
                   <div className="px-3 py-1 flex items-center rounded-full bg-red-100 text-sm font-medium text-red-800">
                     <Frown className="h-3.5 w-3.5 mr-1.5" />
-                    {w.consecutiveSadDays} día{w.consecutiveSadDays !== 1 ? "s" : ""}
+                    {w.sadCount} {w.sadCount === 1 ? "vez" : "veces"}
                   </div>
                 </div>
               </div>

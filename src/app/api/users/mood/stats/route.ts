@@ -49,7 +49,7 @@ export async function GET(req: NextRequest) {
     const byDay = new Map<string, string>();
     for (const r of rows) {
       const d = new Date(r.created_at as Date);
-      const day = `${d.getUTCFullYear()}-${d.getUTCMonth()}-${d.getUTCDate()}`;
+      const day = `${d.getUTCFullYear()}-${String(d.getUTCMonth()).padStart(2, '0')}-${String(d.getUTCDate()).padStart(2, '0')}`;
       if (!byDay.has(day)) byDay.set(day, String(r.mood));
     }
     const sorted = [...byDay.entries()].sort((a, b) => (a[0] < b[0] ? 1 : -1));
@@ -68,6 +68,9 @@ export async function GET(req: NextRequest) {
 
   const userSummaries = [...byUser.entries()].map(([key, rows]) => {
     const latest = rows[0];
+    // rows are newest-first, so the first triste row is the most recent one.
+    const tristeRows = rows.filter((r) => r.mood === 'triste');
+    const latestTriste = tristeRows[0];
     return {
       user_id: latest.user_id ?? null,
       cedula: latest.cedula ?? null,
@@ -82,6 +85,12 @@ export async function GET(req: NextRequest) {
       latest_at: latest.created_at,
       checkin_count: rows.length,
       consecutive_triste: consecutiveTristeDays(rows),
+      // How many times this user has reported "triste" in the window, plus the
+      // most recent sad check-in itself — so the admin card can surface anyone
+      // who has been sad even once (not only on consecutive days).
+      triste_count: tristeRows.length,
+      latest_triste_at: latestTriste?.created_at ?? null,
+      latest_triste_note: latestTriste?.note ?? null,
       _groupKey: key,
     };
   });
