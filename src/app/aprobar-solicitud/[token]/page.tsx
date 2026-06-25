@@ -189,7 +189,7 @@ export default function AprobarSolicitudPage({
               estado={(decisionResult ?? (solicitud.estado as 'aprobado' | 'rechazado')) || 'aprobado'}
             />
             <div className="p-6">
-              <SolicitudSummary s={solicitud} />
+              <SolicitudSummary s={solicitud} token={token} />
               {solicitud.motivo_respuesta && (
                 <div className="mt-5 bg-gray-50 border border-gray-200 rounded-xl p-4">
                   <p className="text-[11px] uppercase tracking-wider font-bold text-gray-500 mb-1">
@@ -230,7 +230,7 @@ export default function AprobarSolicitudPage({
             </div>
 
             <div className="p-5 sm:p-6">
-              <SolicitudSummary s={solicitud} />
+              <SolicitudSummary s={solicitud} token={token} />
 
               <TeamCalendar token={token} current={solicitud} />
 
@@ -583,7 +583,17 @@ function DecidedBanner({ estado }: { estado: 'aprobado' | 'rechazado' }) {
   );
 }
 
-function SolicitudSummary({ s }: { s: Solicitud }) {
+/**
+ * Route an attachment link through the token-gated file endpoint so approvers
+ * (who have no logged-in session) can open it. Falls back to the raw url for
+ * external links (e.g. OneDrive) that aren't served by /api/upload.
+ */
+function attachmentHref(url: string, token: string): string {
+  const m = String(url || '').match(/([a-f0-9]{24})/i);
+  return m ? `/api/upload/by-token/${token}/${m[1]}` : url;
+}
+
+function SolicitudSummary({ s, token }: { s: Solicitud; token: string }) {
   const formatDate = (d: string | null) => {
     if (!d) return '—';
     // 'YYYY-MM-DD' sin tz se parsea como UTC y al renderizar en hora local
@@ -649,7 +659,7 @@ function SolicitudSummary({ s }: { s: Solicitud }) {
             {s.document_urls.map((d, i) => (
               <li key={i}>
                 <a
-                  href={d.url}
+                  href={attachmentHref(d.url, token)}
                   target="_blank"
                   rel="noreferrer noopener"
                   className="text-sm text-[#b47e00] hover:text-[#f4a900] underline break-all"
