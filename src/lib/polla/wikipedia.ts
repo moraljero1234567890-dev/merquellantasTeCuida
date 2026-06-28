@@ -223,7 +223,7 @@ function splitTemplateArgs(body: string): Record<string, string> {
 
 function extractFootballBoxes(wikitext: string): Record<string, string>[] {
   const out: Record<string, string>[] = [];
-  const startRe = /\{\{#invoke:football box\|main\b/g;
+  const startRe = /\{\{#invoke:football box\|main\b/gi;
   let m: RegExpExecArray | null;
   while ((m = startRe.exec(wikitext)) !== null) {
     let i = m.index + 2;
@@ -250,6 +250,25 @@ function extractFootballBoxes(wikitext: string): Record<string, string>[] {
     out.push(splitTemplateArgs(stripped));
   }
   return out;
+}
+
+function escapeRegExp(s: string): string {
+  return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+// Returns the wikitext between `<section begin="label"/>` and the matching
+// `<section end="label"/>` markers, or null when the label isn't present. Used
+// to pull a single transcluded match ({{#lst:Article|label}}) out of a shared
+// sub-article that holds many labelled match boxes.
+function sliceLabeledSection(wikitext: string, label: string): string | null {
+  const esc = escapeRegExp(label);
+  const begin = new RegExp(`<section\\s+begin\\s*=\\s*"?${esc}"?\\s*/>`);
+  const b = begin.exec(wikitext);
+  if (!b) return null;
+  const rest = wikitext.slice(b.index + b[0].length);
+  const end = new RegExp(`<section\\s+end\\s*=\\s*"?${esc}"?\\s*/>`);
+  const e = end.exec(rest);
+  return e ? rest.slice(0, e.index) : rest;
 }
 
 function parseLocalTime(raw: string): {
@@ -502,6 +521,18 @@ async function parseKnockoutPage(): Promise<MatchDoc[]> {
   while ((sm = sectionRe.exec(wt)) !== null) {
     sections.push({ label: sm[1].trim(), start: sm.index });
   }
+  // Each transcluded sub-article (e.g. "2026 FIFA World Cup round of 32") is
+  // fetched at most once even though it holds many matches.
+  const subCache = new Map<string, Promise<string>>();
+  const getSub = (page: string) => {
+    let p = subCache.get(page);
+    if (!p) {
+      p = fetchWikitext(page);
+      subCache.set(page, p);
+    }
+    return p;
+  };
+
   const out: MatchDoc[] = [];
   for (let i = 0; i < sections.length; i++) {
     const { label, start } = sections[i];
@@ -509,15 +540,47 @@ async function parseKnockoutPage(): Promise<MatchDoc[]> {
     if (!cfg) continue;
     const end = sections[i + 1]?.start ?? wt.length;
     const segment = wt.slice(start, end);
-    const boxes = extractFootballBoxes(segment);
-    boxes.forEach((fields, idx) => {
+
+    // A round's matches are either inline ({{#invoke:football box}}) or, once
+    // the teams are known, transcluded from a shared sub-article via
+    // {{#lst:Article|Label}} — which is how the Round of 32 is laid out. Resolve
+    // each lst ref by slicing its labelled <section>…</section> out of the
+    // sub-article and reading the box inside. Index by the ref's position so a
+    // single unresolvable match doesn't renumber the others.
+    const lstRe = /\{\{\s*#lst:\s*([^|}]+?)\s*\|\s*([^}]+?)\s*\}\}/g;
+    const lstRefs: Array<{ page: string; lbl: string }> = [];
+    let lm: RegExpExecArray | null;
+    while ((lm = lstRe.exec(segment)) !== null) {
+      lstRefs.push({ page: lm[1].trim(), lbl: lm[2].trim() });
+    }
+
+    const entries: Array<{ fields: Record<string, string>; idx: number }> = [];
+    if (lstRefs.length > 0) {
+      for (let r = 0; r < lstRefs.length; r++) {
+        try {
+          const subWt = await getSub(lstRefs[r].page);
+          const region = sliceLabeledSection(subWt, lstRefs[r].lbl);
+          const fields = region ? extractFootballBoxes(region)[0] : null;
+          if (fields) entries.push({ fields, idx: r });
+        } catch {
+          // Sub-article unavailable: skip. applyProviderResults preserves any
+          // existing doc for this id (and never downgrades a finished result).
+        }
+      }
+    } else {
+      extractFootballBoxes(segment).forEach((fields, idx) =>
+        entries.push({ fields, idx }),
+      );
+    }
+
+    for (const { fields, idx } of entries) {
       const doc = toMatchDoc(fields, {
         stage: cfg.stage,
         stageLabel: cfg.stageLabel,
         externalId: `${cfg.stage}-${idx + 1}`,
       });
       if (doc) out.push(doc);
-    });
+    }
   }
   return out;
 }
