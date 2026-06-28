@@ -292,9 +292,32 @@ export async function getLockStatus(): Promise<LockStatus> {
   const groupMatches = matches.filter((m) => m.stage === "GROUP_STAGE");
   const allGroupFinished = groupMatches.length > 0 && groupMatches.every((m) => m.status === "FINISHED");
 
+  // FREEZE: while the tournament is underway, every submitted boleta is kept
+  // exactly as the user left it. Critically, useActualStandings stays FALSE so
+  // the knockout is never rebuilt from real results — rebuilding reseeds the
+  // bracket with the actual qualified teams (which differ from each user's
+  // predicted teams) and silently wipes their champion + runner-up picks, the
+  // only scored knockout predictions. Set POLLA_FREEZE=false to re-enable the
+  // live round-by-round knockout editing logic below.
+  const FREEZE_PREDICTIONS = process.env.POLLA_FREEZE !== "false";
+  if (FREEZE_PREDICTIONS) {
+    return { groupLocked: true, knockoutOpen: false, editableStages: [], allGroupFinished, useActualStandings: false };
+  }
+
   if (!allGroupFinished) {
     return { groupLocked: true, knockoutOpen: false, editableStages: [], allGroupFinished: false, useActualStandings: false };
   }
+
+  // A match counts as "started" once its kickoff time passes. The Wikipedia
+  // source never reports IN_PLAY (only SCHEDULED/FINISHED), so without the
+  // kickoff check a round would stay editable until its first match *finished*
+  // (~2h after kickoff), letting people edit while it's being played. Locking
+  // on kickoff blocks the round the moment its first match begins.
+  const nowMs = now.getTime();
+  const hasStarted = (m: { status: string; utcDate: string }) =>
+    m.status === "IN_PLAY" ||
+    m.status === "FINISHED" ||
+    (!!m.utcDate && new Date(m.utcDate).getTime() <= nowMs);
 
   const knockoutOrder: string[] = ["ROUND_OF_32", "ROUND_OF_16", "QUARTER_FINALS", "SEMI_FINALS"];
   const editableStages: string[] = [];
@@ -306,7 +329,7 @@ export async function getLockStatus(): Promise<LockStatus> {
       break;
     }
     const allFinished = stageMatches.every((m) => m.status === "FINISHED");
-    const anyStarted = stageMatches.some((m) => m.status === "IN_PLAY" || m.status === "FINISHED");
+    const anyStarted = stageMatches.some(hasStarted);
 
     if (!anyStarted) {
       editableStages.push(stage);
@@ -322,8 +345,8 @@ export async function getLockStatus(): Promise<LockStatus> {
   if (sfAllDone) {
     const thirdMatches = matches.filter((m) => m.stage === "THIRD_PLACE");
     const finalMatches = matches.filter((m) => m.stage === "FINAL");
-    const thirdStarted = thirdMatches.some((m) => m.status === "IN_PLAY" || m.status === "FINISHED");
-    const finalStarted = finalMatches.some((m) => m.status === "IN_PLAY" || m.status === "FINISHED");
+    const thirdStarted = thirdMatches.some(hasStarted);
+    const finalStarted = finalMatches.some(hasStarted);
     if (!thirdStarted && !finalStarted) {
       editableStages.push("THIRD_PLACE", "FINAL");
     }
