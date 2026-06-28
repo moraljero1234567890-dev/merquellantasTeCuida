@@ -10,6 +10,7 @@ import {
 } from "@/lib/polla/store";
 import {
   buildKnockoutFromGroup,
+  buildR32SeedsFromActual,
   championFromFinal,
   computeGroupStandings,
   isGroupStageComplete,
@@ -52,7 +53,18 @@ async function recomputeKnockout(prediction: PredictionDoc, useActual: boolean):
   if (useActual) {
     const actualScores = extractActualGroupScores(matches);
     const standings = computeGroupStandings(groupMatches, actualScores);
-    const knockout = buildKnockoutFromGroup(standings, prediction.knockout);
+    // Prefer the real, already-decided Round of 32 fixtures (parsed from
+    // Wikipedia) over our computed third-place allocation, which can't
+    // reproduce FIFA's official slotting. Falls back to the computed seeds
+    // when the real bracket isn't fully available yet.
+    const actualR32 = matches
+      .filter((m) => m.stage === "ROUND_OF_32")
+      .map((m) => ({
+        home: { code: m.home.code, name: m.home.name },
+        away: { code: m.away.code, name: m.away.name },
+      }));
+    const r32Override = buildR32SeedsFromActual(standings, actualR32) ?? undefined;
+    const knockout = buildKnockoutFromGroup(standings, prediction.knockout, r32Override);
     const champion = championFromFinal(knockout.final);
     return { ...prediction, knockout, champion };
   }

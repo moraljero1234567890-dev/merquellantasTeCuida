@@ -250,6 +250,74 @@ export function buildR32Seeds(
   }));
 }
 
+export type ActualKnockoutMatch = {
+  home: { code: string; name: string };
+  away: { code: string; name: string };
+};
+
+// Seeds the Round of 32 from the REAL, already-decided knockout fixtures
+// (parsed from Wikipedia into polla_matches) instead of computing the
+// third-place slot assignment ourselves. FIFA's official third-place
+// allocation is a fixed table that our generic bipartite matching can't
+// reproduce when more than one valid assignment exists; the real fixtures
+// are authoritative, so once they're known we use them directly.
+//
+// Each R32 template slot has at least one "anchor" side (a group winner or
+// runner-up), whose team we know from the actual standings. We find the real
+// fixture containing that anchor team and read off its opponent — including
+// the third-placed team — placing both onto the templated home/away sides so
+// the downstream bracket tree pairs them exactly as the official bracket does.
+//
+// Returns null (caller falls back to buildR32Seeds) whenever the real fixtures
+// aren't fully available yet or don't line up with our standings — e.g. before
+// the bracket is set, or if the data sources use mismatched team codes.
+export function buildR32SeedsFromActual(
+  standings: Record<string, StandingRow[]>,
+  actualR32: ActualKnockoutMatch[],
+): Array<{ home: R32SeedTeam; away: R32SeedTeam }> | null {
+  const fixtures = actualR32.filter((m) => m?.home?.code && m?.away?.code);
+  if (fixtures.length < R32_TEMPLATE.length) return null;
+
+  const anchorCodeForSlot = (slot: SeedSlot): string | null => {
+    if (slot.kind === "W") return standings[slot.group]?.[0]?.teamCode ?? null;
+    if (slot.kind === "R") return standings[slot.group]?.[1]?.teamCode ?? null;
+    return null;
+  };
+
+  // anchor team code -> which R32 slot it belongs to and on which side
+  const anchors = new Map<string, { index: number; side: "home" | "away" }>();
+  for (let i = 0; i < R32_TEMPLATE.length; i++) {
+    const hc = anchorCodeForSlot(R32_TEMPLATE[i].home);
+    const ac = anchorCodeForSlot(R32_TEMPLATE[i].away);
+    if (hc) anchors.set(hc, { index: i, side: "home" });
+    if (ac) anchors.set(ac, { index: i, side: "away" });
+  }
+
+  const seeds: Array<{ home: R32SeedTeam; away: R32SeedTeam } | null> =
+    R32_TEMPLATE.map(() => null);
+
+  for (const fx of fixtures) {
+    const homeAnchor = anchors.get(fx.home.code);
+    const awayAnchor = anchors.get(fx.away.code);
+    const anchor = homeAnchor ?? awayAnchor;
+    if (!anchor) return null; // a fixture we can't place -> bail to fallback
+    if (seeds[anchor.index]) return null; // duplicate/conflicting fixture
+
+    const anchorTeam = homeAnchor ? fx.home : fx.away;
+    const otherTeam = homeAnchor ? fx.away : fx.home;
+    const anchorSeed: R32SeedTeam = { code: anchorTeam.code, name: anchorTeam.name };
+    const otherSeed: R32SeedTeam = { code: otherTeam.code, name: otherTeam.name };
+
+    seeds[anchor.index] =
+      anchor.side === "home"
+        ? { home: anchorSeed, away: otherSeed }
+        : { home: otherSeed, away: anchorSeed };
+  }
+
+  if (seeds.some((s) => s === null)) return null;
+  return seeds as Array<{ home: R32SeedTeam; away: R32SeedTeam }>;
+}
+
 function emptyPick(
   matchId: string,
   stage: KnockoutPick["stage"],
@@ -298,8 +366,9 @@ function loserOf(pick: KnockoutPick): R32SeedTeam {
 export function buildKnockoutFromGroup(
   standings: Record<string, StandingRow[]>,
   existing?: PredictionDoc["knockout"],
+  r32SeedsOverride?: Array<{ home: R32SeedTeam; away: R32SeedTeam }>,
 ): PredictionDoc["knockout"] {
-  const r32Seeds = buildR32Seeds(standings);
+  const r32Seeds = r32SeedsOverride ?? buildR32Seeds(standings);
   const r32: KnockoutPick[] = r32Seeds.map((seed, i) => {
     const id = `R32-${i + 1}`;
     const prev = existing?.r32?.find((p) => p.matchId === id);
