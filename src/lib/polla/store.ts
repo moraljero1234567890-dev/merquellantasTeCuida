@@ -292,15 +292,9 @@ export async function getLockStatus(): Promise<LockStatus> {
   const groupMatches = matches.filter((m) => m.stage === "GROUP_STAGE");
   const allGroupFinished = groupMatches.length > 0 && groupMatches.every((m) => m.status === "FINISHED");
 
-  // FREEZE: while the tournament is underway, every submitted boleta is kept
-  // exactly as the user left it. Critically, useActualStandings stays FALSE so
-  // the knockout is never rebuilt from real results — rebuilding reseeds the
-  // bracket with the actual qualified teams (which differ from each user's
-  // predicted teams) and silently wipes their champion + runner-up picks, the
-  // only scored knockout predictions. Set POLLA_FREEZE=false to re-enable the
-  // live round-by-round knockout editing logic below.
-  const FREEZE_PREDICTIONS = process.env.POLLA_FREEZE !== "false";
-  if (FREEZE_PREDICTIONS) {
+  // Kill-switch: POLLA_FREEZE=true re-freezes everything (no edits, no rebuild)
+  // in case the live knockout ever needs to be paused.
+  if (process.env.POLLA_FREEZE === "true") {
     return { groupLocked: true, knockoutOpen: false, editableStages: [], allGroupFinished, useActualStandings: false };
   }
 
@@ -308,57 +302,80 @@ export async function getLockStatus(): Promise<LockStatus> {
     return { groupLocked: true, knockoutOpen: false, editableStages: [], allGroupFinished: false, useActualStandings: false };
   }
 
-  // A match counts as "started" once its kickoff time passes. The Wikipedia
-  // source never reports IN_PLAY (only SCHEDULED/FINISHED), so without the
-  // kickoff check a round would stay editable until its first match *finished*
-  // (~2h after kickoff), letting people edit while it's being played. Locking
-  // on kickoff blocks the round the moment its first match begins.
-  const nowMs = now.getTime();
-  const hasStarted = (m: { status: string; utcDate: string }) =>
+  // Live knockout phase: the group stage is locked, but users predict the REAL
+  // bracket and may edit each game until it kicks off. Locking is per-MATCH (a
+  // game closes at its own kickoff — see getKnockoutLockInfo / lockedKnockoutMatchIds),
+  // not per-stage, so an already-played game is locked while the rest stay open.
+  // The champion stays editable until the real final kicks off. useActualStandings
+  // makes the bracket show the real fixtures.
+  return {
+    groupLocked: true,
+    knockoutOpen: true,
+    editableStages: ["ROUND_OF_32", "ROUND_OF_16", "QUARTER_FINALS", "SEMI_FINALS", "THIRD_PLACE", "FINAL"],
+    allGroupFinished: true,
+    useActualStandings: true,
+  };
+}
+
+export type KnockoutLockInfo = {
+  startedPairs: Set<string>;
+  finalStarted: boolean;
+  thirdStarted: boolean;
+};
+
+/** A real knockout match counts as started once its kickoff passes (the
+ *  Wikipedia source never reports IN_PLAY, only SCHEDULED/FINISHED). */
+export async function getKnockoutLockInfo(): Promise<KnockoutLockInfo> {
+  const matches = await getAllMatches();
+  const nowMs = Date.now();
+  const started = (m: { status: string; utcDate: string }) =>
     m.status === "IN_PLAY" ||
     m.status === "FINISHED" ||
     (!!m.utcDate && new Date(m.utcDate).getTime() <= nowMs);
 
-  const knockoutOrder: string[] = ["ROUND_OF_32", "ROUND_OF_16", "QUARTER_FINALS", "SEMI_FINALS"];
-  const editableStages: string[] = [];
-
-  for (const stage of knockoutOrder) {
-    const stageMatches = matches.filter((m) => m.stage === stage);
-    if (stageMatches.length === 0) {
-      editableStages.push(stage);
-      break;
+  const startedPairs = new Set<string>();
+  let finalStarted = false;
+  let thirdStarted = false;
+  for (const m of matches) {
+    if (m.stage === "GROUP_STAGE") continue;
+    if (!started(m)) continue;
+    if (m.home?.code && m.away?.code) {
+      startedPairs.add([m.home.code, m.away.code].sort().join("|"));
     }
-    const allFinished = stageMatches.every((m) => m.status === "FINISHED");
-    const anyStarted = stageMatches.some(hasStarted);
-
-    if (!anyStarted) {
-      editableStages.push(stage);
-      break;
-    } else if (!allFinished) {
-      break;
-    }
+    if (m.stage === "FINAL") finalStarted = true;
+    if (m.stage === "THIRD_PLACE") thirdStarted = true;
   }
+  return { startedPairs, finalStarted, thirdStarted };
+}
 
-  // Third place + final: both editable after SF finishes, until either starts
-  const sfMatches = matches.filter((m) => m.stage === "SEMI_FINALS");
-  const sfAllDone = sfMatches.length > 0 && sfMatches.every((m) => m.status === "FINISHED");
-  if (sfAllDone) {
-    const thirdMatches = matches.filter((m) => m.stage === "THIRD_PLACE");
-    const finalMatches = matches.filter((m) => m.stage === "FINAL");
-    const thirdStarted = thirdMatches.some(hasStarted);
-    const finalStarted = finalMatches.some(hasStarted);
-    if (!thirdStarted && !finalStarted) {
-      editableStages.push("THIRD_PLACE", "FINAL");
+/** Returns the matchIds of a prediction's knockout picks that are locked because
+ *  their real game has already kicked off. R32–SF lock when the real game with
+ *  those two teams starts; the final/third lock when the real final/third starts
+ *  (so the champion stays editable until the real final, even if the user's
+ *  predicted finalists differ from the actual ones). */
+export function lockedKnockoutMatchIds(
+  knockout: PredictionDoc["knockout"],
+  info: KnockoutLockInfo,
+): string[] {
+  const picks = [
+    ...knockout.r32,
+    ...knockout.r16,
+    ...knockout.qf,
+    ...knockout.sf,
+    ...(knockout.third ? [knockout.third] : []),
+    ...(knockout.final ? [knockout.final] : []),
+  ];
+  const locked: string[] = [];
+  for (const p of picks) {
+    let isLocked = false;
+    if (p.stage === "FINAL") isLocked = info.finalStarted;
+    else if (p.stage === "THIRD_PLACE") isLocked = info.thirdStarted;
+    else if (p.homeTeamCode && p.awayTeamCode) {
+      isLocked = info.startedPairs.has([p.homeTeamCode, p.awayTeamCode].sort().join("|"));
     }
+    if (isLocked) locked.push(p.matchId);
   }
-
-  return {
-    groupLocked: true,
-    knockoutOpen: editableStages.length > 0,
-    editableStages,
-    allGroupFinished: true,
-    useActualStandings: true,
-  };
+  return locked;
 }
 
 export function extractActualGroupScores(matches: MatchDoc[]): Record<string, import("./types").GroupScore> {

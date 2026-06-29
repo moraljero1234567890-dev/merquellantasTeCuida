@@ -513,6 +513,7 @@ export default function PollaPredictPage() {
     allGroupFinished: boolean;
     useActualStandings: boolean;
   } | null>(null);
+  const [lockedMatchIds, setLockedMatchIds] = useState<Set<string>>(new Set());
   const [activeGroup, setActiveGroup] = useState<string>("A");
   const saveTimers = useRef<Map<string, ReturnType<typeof setTimeout>>>(
     new Map(),
@@ -573,6 +574,7 @@ export default function PollaPredictPage() {
         setPrediction(p.prediction);
         setGroupDrafts(p.prediction?.groupScores ?? {});
         if (p.lockStatus) setLockStatus(p.lockStatus);
+        setLockedMatchIds(new Set<string>(p.lockedMatchIds ?? []));
         setError(null);
       } catch {
         if (!cancelled) setError("No pudimos cargar tu pronóstico.");
@@ -705,12 +707,15 @@ export default function PollaPredictPage() {
         if (res.status === 423) {
           inflight.current = Math.max(0, inflight.current - 1);
           setSaveState("error");
-          setError("Esta ronda está bloqueada. No se pueden modificar estos pronósticos.");
+          setError("Este partido ya comenzó y no se puede editar.");
+          // Reflect the lock in the UI so the field disables immediately.
+          setLockedMatchIds((prev) => new Set(prev).add(matchId));
           return;
         }
         if (!res.ok) throw new Error(await res.text());
-        const data = (await res.json()) as { prediction: PredictionDoc };
+        const data = (await res.json()) as { prediction: PredictionDoc; lockedMatchIds?: string[] };
         setPrediction(data.prediction);
+        if (data.lockedMatchIds) setLockedMatchIds(new Set<string>(data.lockedMatchIds));
         if (payload.kind === "group") {
           setGroupDrafts((prev) => ({
             ...prev,
@@ -1051,20 +1056,9 @@ export default function PollaPredictPage() {
 
             {lockStatus?.allGroupFinished && lockStatus.knockoutOpen && (
               <div className="mx-auto mt-6 max-w-6xl border-l-4 border-emerald-600 bg-emerald-50 p-4 px-6 text-sm text-emerald-800">
-                ¡La fase de grupos terminó! La llave de eliminatorias se ha actualizado con los resultados reales.
-                {lockStatus.editableStages.length > 0 && (
-                  <> Puedes editar: <strong>{lockStatus.editableStages.map(s => {
-                    const names: Record<string, string> = {
-                      ROUND_OF_32: "Dieciseisavos",
-                      ROUND_OF_16: "Octavos",
-                      QUARTER_FINALS: "Cuartos",
-                      SEMI_FINALS: "Semifinales",
-                      THIRD_PLACE: "Tercer puesto",
-                      FINAL: "Final",
-                    };
-                    return names[s] || s;
-                  }).join(", ")}</strong>.</>
-                )}
+                ¡La fase de grupos terminó! La llave muestra los partidos reales. Puedes
+                editar el marcador de cada partido <strong>hasta que ese partido comience</strong>;
+                los que ya iniciaron quedan bloqueados.
               </div>
             )}
 
@@ -1243,7 +1237,7 @@ export default function PollaPredictPage() {
                             width={col.width}
                           >
                             {col.picks.map((p, i) => {
-                              const stageDisabled = lockStatus?.groupLocked && !lockStatus.editableStages.includes(col.stage);
+                              const stageDisabled = lockedMatchIds.has(p.matchId);
                               return (
                               <BracketSlot
                                 key={p.matchId}
@@ -1291,7 +1285,7 @@ export default function PollaPredictPage() {
                       <BracketCard
                         pick={prediction.knockout.third}
                         size="lg"
-                        disabled={lockStatus?.groupLocked && !lockStatus.editableStages.includes("THIRD_PLACE")}
+                        disabled={lockedMatchIds.has(prediction.knockout.third.matchId)}
                         onChange={(h, a) =>
                           queueKnockoutSave(
                             prediction.knockout.third!.matchId,

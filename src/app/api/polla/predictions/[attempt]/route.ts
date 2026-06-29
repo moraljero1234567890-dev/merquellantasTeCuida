@@ -6,6 +6,8 @@ import {
   isTournamentLocked,
   upsertPrediction,
   getLockStatus,
+  getKnockoutLockInfo,
+  lockedKnockoutMatchIds,
   extractActualGroupScores,
 } from "@/lib/polla/store";
 import {
@@ -64,7 +66,27 @@ async function recomputeKnockout(prediction: PredictionDoc, useActual: boolean):
         away: { code: m.away.code, name: m.away.name },
       }));
     const r32Override = buildR32SeedsFromActual(standings, actualR32) ?? undefined;
-    const knockout = buildKnockoutFromGroup(standings, prediction.knockout, r32Override);
+
+    // Already-FINISHED knockout games are fixed reality: feed their results in so
+    // the real winner propagates up the bracket (lets users' brackets flow past
+    // games they couldn't predict, e.g. the first R32 game already played).
+    const actualByPair = new Map<string, { winnerCode: string | null; byCode: Record<string, number> }>();
+    for (const m of matches) {
+      if (m.stage === "GROUP_STAGE" || m.status !== "FINISHED") continue;
+      const ft = m.score?.fullTime;
+      if (!ft || !m.home?.code || !m.away?.code) continue;
+      const pens = m.score?.penalties;
+      const winnerCode =
+        ft.home > ft.away ? m.home.code
+        : ft.away > ft.home ? m.away.code
+        : pens && pens.home > pens.away ? m.home.code
+        : pens && pens.away > pens.home ? m.away.code
+        : null;
+      const key = [m.home.code, m.away.code].sort().join("|");
+      actualByPair.set(key, { winnerCode, byCode: { [m.home.code]: ft.home, [m.away.code]: ft.away } });
+    }
+
+    const knockout = buildKnockoutFromGroup(standings, prediction.knockout, r32Override, actualByPair);
     const champion = championFromFinal(knockout.final);
     return { ...prediction, knockout, champion };
   }
@@ -80,24 +102,6 @@ async function recomputeKnockout(prediction: PredictionDoc, useActual: boolean):
   const knockout = buildKnockoutFromGroup(standings, prediction.knockout);
   const champion = championFromFinal(knockout.final);
   return { ...prediction, knockout, champion };
-}
-
-function findMatchStage(matchId: string, prediction: PredictionDoc): string | null {
-  for (const pick of prediction.knockout.r32) {
-    if (pick.matchId === matchId) return "ROUND_OF_32";
-  }
-  for (const pick of prediction.knockout.r16) {
-    if (pick.matchId === matchId) return "ROUND_OF_16";
-  }
-  for (const pick of prediction.knockout.qf) {
-    if (pick.matchId === matchId) return "QUARTER_FINALS";
-  }
-  for (const pick of prediction.knockout.sf) {
-    if (pick.matchId === matchId) return "SEMI_FINALS";
-  }
-  if (prediction.knockout.third?.matchId === matchId) return "THIRD_PLACE";
-  if (prediction.knockout.final?.matchId === matchId) return "FINAL";
-  return null;
 }
 
 export async function GET(request: NextRequest, ctx: { params: Promise<Params> }) {
@@ -129,7 +133,10 @@ export async function GET(request: NextRequest, ctx: { params: Promise<Params> }
     await upsertPrediction(prediction);
   }
 
-  return NextResponse.json({ prediction, lockStatus });
+  const lockInfo = await getKnockoutLockInfo();
+  const lockedMatchIds = lockedKnockoutMatchIds(prediction.knockout, lockInfo);
+
+  return NextResponse.json({ prediction, lockStatus, lockedMatchIds });
 }
 
 type PostBody =
@@ -176,10 +183,11 @@ export async function POST(request: NextRequest, ctx: { params: Promise<Params> 
     if (!lockStatus.knockoutOpen) {
       return NextResponse.json({ error: "Knockout predictions are locked" }, { status: 423 });
     }
-    // Check if this specific match's stage is editable
-    const matchStage = findMatchStage(body.matchId, prediction);
-    if (matchStage && !lockStatus.editableStages.includes(matchStage)) {
-      return NextResponse.json({ error: `${matchStage} predictions are locked` }, { status: 423 });
+    // Per-match lock: a game can be edited until its real fixture kicks off.
+    const lockInfo = await getKnockoutLockInfo();
+    const lockedIds = lockedKnockoutMatchIds(prediction.knockout, lockInfo);
+    if (lockedIds.includes(body.matchId)) {
+      return NextResponse.json({ error: "Este partido ya comenzó y no se puede editar" }, { status: 423 });
     }
   }
 
@@ -256,5 +264,8 @@ export async function POST(request: NextRequest, ctx: { params: Promise<Params> 
 
   prediction.updatedAt = new Date();
   await upsertPrediction(prediction);
-  return NextResponse.json({ prediction, lockStatus });
+
+  const lockInfo = await getKnockoutLockInfo();
+  const lockedMatchIds = lockedKnockoutMatchIds(prediction.knockout, lockInfo);
+  return NextResponse.json({ prediction, lockStatus, lockedMatchIds });
 }

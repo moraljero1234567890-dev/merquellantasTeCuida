@@ -363,11 +363,35 @@ function loserOf(pick: KnockoutPick): R32SeedTeam {
   return null;
 }
 
+export type ActualKnockoutResult = {
+  winnerCode: string | null;
+  byCode: Record<string, number>;
+};
+
 export function buildKnockoutFromGroup(
   standings: Record<string, StandingRow[]>,
   existing?: PredictionDoc["knockout"],
   r32SeedsOverride?: Array<{ home: R32SeedTeam; away: R32SeedTeam }>,
+  actualByPair?: Map<string, ActualKnockoutResult>,
 ): PredictionDoc["knockout"] {
+  // A knockout game that has already FINISHED in real life is fixed: its actual
+  // result is written into the pick (oriented to the pick's home/away) so the
+  // real winner propagates up the bracket. This lets every user's bracket flow
+  // past games they couldn't predict (already played), all the way to a champion.
+  const applyActual = (pick: KnockoutPick): KnockoutPick => {
+    if (!actualByPair || !pick.homeTeamCode || !pick.awayTeamCode) return pick;
+    const key = [pick.homeTeamCode, pick.awayTeamCode].sort().join("|");
+    const r = actualByPair.get(key);
+    if (!r) return pick;
+    const home = r.byCode[pick.homeTeamCode] ?? 0;
+    const away = r.byCode[pick.awayTeamCode] ?? 0;
+    let penaltyWinner: KnockoutPick["penaltyWinner"] = null;
+    if (home === away && r.winnerCode) {
+      penaltyWinner = r.winnerCode === pick.homeTeamCode ? "home" : "away";
+    }
+    return { ...pick, home, away, penaltyWinner };
+  };
+
   const r32Seeds = r32SeedsOverride ?? buildR32Seeds(standings);
   const r32: KnockoutPick[] = r32Seeds.map((seed, i) => {
     const id = `R32-${i + 1}`;
@@ -378,9 +402,9 @@ export function buildKnockoutFromGroup(
       prev.homeTeamCode === fresh.homeTeamCode &&
       prev.awayTeamCode === fresh.awayTeamCode
     ) {
-      return { ...fresh, home: prev.home, away: prev.away, penaltyWinner: prev.penaltyWinner };
+      return applyActual({ ...fresh, home: prev.home, away: prev.away, penaltyWinner: prev.penaltyWinner });
     }
-    return fresh;
+    return applyActual(fresh);
   });
 
   const r16: KnockoutPick[] = [];
@@ -395,9 +419,9 @@ export function buildKnockoutFromGroup(
       prev.homeTeamCode === fresh.homeTeamCode &&
       prev.awayTeamCode === fresh.awayTeamCode
     ) {
-      r16.push({ ...fresh, home: prev.home, away: prev.away, penaltyWinner: prev.penaltyWinner });
+      r16.push(applyActual({ ...fresh, home: prev.home, away: prev.away, penaltyWinner: prev.penaltyWinner }));
     } else {
-      r16.push(fresh);
+      r16.push(applyActual(fresh));
     }
   }
 
@@ -413,9 +437,9 @@ export function buildKnockoutFromGroup(
       prev.homeTeamCode === fresh.homeTeamCode &&
       prev.awayTeamCode === fresh.awayTeamCode
     ) {
-      qf.push({ ...fresh, home: prev.home, away: prev.away, penaltyWinner: prev.penaltyWinner });
+      qf.push(applyActual({ ...fresh, home: prev.home, away: prev.away, penaltyWinner: prev.penaltyWinner }));
     } else {
-      qf.push(fresh);
+      qf.push(applyActual(fresh));
     }
   }
 
@@ -431,9 +455,9 @@ export function buildKnockoutFromGroup(
       prev.homeTeamCode === fresh.homeTeamCode &&
       prev.awayTeamCode === fresh.awayTeamCode
     ) {
-      sf.push({ ...fresh, home: prev.home, away: prev.away, penaltyWinner: prev.penaltyWinner });
+      sf.push(applyActual({ ...fresh, home: prev.home, away: prev.away, penaltyWinner: prev.penaltyWinner }));
     } else {
-      sf.push(fresh);
+      sf.push(applyActual(fresh));
     }
   }
 
@@ -441,23 +465,25 @@ export function buildKnockoutFromGroup(
   const sfLoserB = loserOf(sf[1]);
   const thirdFresh = emptyPick("THIRD-1", "THIRD_PLACE", sfLoserA, sfLoserB);
   const thirdPrev = existing?.third;
-  const third: KnockoutPick =
+  const third: KnockoutPick = applyActual(
     thirdPrev &&
     thirdPrev.homeTeamCode === thirdFresh.homeTeamCode &&
     thirdPrev.awayTeamCode === thirdFresh.awayTeamCode
       ? { ...thirdFresh, home: thirdPrev.home, away: thirdPrev.away, penaltyWinner: thirdPrev.penaltyWinner }
-      : thirdFresh;
+      : thirdFresh,
+  );
 
   const sfWinA = winnerOf(sf[0]);
   const sfWinB = winnerOf(sf[1]);
   const finalFresh = emptyPick("FINAL-1", "FINAL", sfWinA, sfWinB);
   const finalPrev = existing?.final;
-  const final: KnockoutPick =
+  const final: KnockoutPick = applyActual(
     finalPrev &&
     finalPrev.homeTeamCode === finalFresh.homeTeamCode &&
     finalPrev.awayTeamCode === finalFresh.awayTeamCode
       ? { ...finalFresh, home: finalPrev.home, away: finalPrev.away, penaltyWinner: finalPrev.penaltyWinner }
-      : finalFresh;
+      : finalFresh,
+  );
 
   return { r32, r16, qf, sf, third, final };
 }
