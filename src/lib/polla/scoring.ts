@@ -23,7 +23,17 @@ export type ScoreBreakdown = {
     champion: number;
     points: number;
   };
+  bonus: number;
   total: number;
+};
+
+// Live point mirror for specific users: their non-source attempts inherit
+// (source attempt's total + offset) as a bonus ON TOP of their own earned
+// points, recomputed every time the leaderboard is built. Set up for
+// tiremaster22 (Angel Gomez), whose unfilled attempts mirror his filled
+// attempt 1 minus 100.
+const POINT_MIRROR: Record<string, { sourceAttempt: number; offset: number }> = {
+  "tiremaster22@aol.com": { sourceAttempt: 1, offset: -100 },
 };
 
 export type LeaderboardRow = {
@@ -116,6 +126,7 @@ function emptyBreakdown(): ScoreBreakdown {
   return {
     group: { outcomes: 0, exact: 0, goalDiff: 0, points: 0 },
     knockout: { runnerUp: 0, champion: 0, points: 0 },
+    bonus: 0,
     total: 0,
   };
 }
@@ -200,6 +211,20 @@ export function computeLeaderboard(
       totalAttempts: totalAttemptsByEmail.get(p.userEmail) ?? 0,
       breakdown: br,
     });
+  }
+
+  // Apply live point mirrors: a configured user's non-source attempts get
+  // (source attempt total + offset) added on top of whatever they earned.
+  for (const [email, cfg] of Object.entries(POINT_MIRROR)) {
+    const userRows = rows.filter((r) => r.email === email);
+    const source = userRows.find((r) => r.attempt === cfg.sourceAttempt);
+    if (!source) continue;
+    const bonus = Math.max(0, source.breakdown.total + cfg.offset);
+    for (const r of userRows) {
+      if (r.attempt === cfg.sourceAttempt) continue;
+      r.breakdown.bonus = bonus;
+      r.breakdown.total += bonus;
+    }
   }
 
   rows.sort((a, b) => {
