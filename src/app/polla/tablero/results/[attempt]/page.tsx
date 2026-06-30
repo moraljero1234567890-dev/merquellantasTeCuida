@@ -67,7 +67,7 @@ function userPickedWinner(p: KnockoutPick): string | null {
   return predictedWinnerCode(p);
 }
 
-const KO_PTS = {
+const KO_PTS: Record<string, number> = {
   ROUND_OF_32: 25,
   ROUND_OF_16: 50,
   QUARTER_FINALS: 75,
@@ -76,7 +76,7 @@ const KO_PTS = {
   CHAMPION: 300,
   RUNNER_UP: 250,
   CHAMPION_AND_RUNNER_UP: 350,
-} as const;
+};
 
 function MiniMatch({
   h,
@@ -126,28 +126,30 @@ function MiniMatch({
   );
 }
 
-// One of the user's predicted knockout matches. `advanced` is whether the team
-// they backed to win actually advanced from this round in reality (null = that
-// round hasn't produced results yet). `eliminated` flags a backed team that is
-// already out (lost a real match this round), so the user gets clear feedback.
+// One of the user's predicted knockout matches.
+// `advanced`: true = the team they backed won its real match, false = lost, null = not played yet.
+// `pts`: points earned for this pick (null = result not yet known for this match).
 function PredictedMatchCard({
   pick,
   advanced,
+  pts,
 }: {
   pick: KnockoutPick;
   advanced: boolean | null;
+  pts: number | null;
 }) {
   const h = displayTeam(pick.homeTeamCode, pick.homeTeamName);
   const a = displayTeam(pick.awayTeamCode, pick.awayTeamName);
+  // Use userPickedWinner so the winner label reflects the original prediction
+  // even after applyActual overwrote the pick scores with real results.
+  const pickedCode = userPickedWinner(pick);
   const winnerName =
-    predictedWinnerCode(pick) === pick.homeTeamCode
-      ? h.name
-      : predictedWinnerCode(pick) === pick.awayTeamCode
-        ? a.name
-        : null;
+    pickedCode === pick.homeTeamCode ? h.name
+    : pickedCode === pick.awayTeamCode ? a.name
+    : null;
   return (
     <li
-      className={`border p-4 ${
+      className={`border p-3 ${
         advanced === true
           ? "border-emerald-600 bg-emerald-50"
           : advanced === false
@@ -162,15 +164,25 @@ function PredictedMatchCard({
         away={pick.away}
         pen={!!pick.penaltyWinner}
       />
-      {advanced !== null && winnerName && (
-        <div className="mt-2 text-center font-mono text-[10px] font-black uppercase tracking-[0.2em]">
-          {advanced ? (
+      <div className="mt-2 flex items-center justify-between gap-2">
+        <div className="font-mono text-[10px] font-black uppercase tracking-[0.2em]">
+          {advanced === true && winnerName && (
             <span className="text-emerald-700">{winnerName} avanzó ✓</span>
-          ) : (
-            <span className="text-red-600">{winnerName} quedó eliminado</span>
+          )}
+          {advanced === false && winnerName && (
+            <span className="text-red-600">{winnerName} eliminado ✗</span>
           )}
         </div>
-      )}
+        {pts !== null && (
+          <span
+            className={`shrink-0 rounded-sm px-2 py-0.5 font-mono text-[11px] font-black tabular-nums ${
+              pts > 0 ? "bg-emerald-600 text-white" : "bg-[var(--line)] text-[var(--foreground-muted)]"
+            }`}
+          >
+            {pts > 0 ? `+${pts}` : "0"} pts
+          </span>
+        )}
+      </div>
     </li>
   );
 }
@@ -694,46 +706,90 @@ export default function PollaResultsPage() {
                 ).map(({ stage, picks }) => {
                   const real = realByStage.get(stage) ?? [];
                   if (!picks.length && !real.length) return null;
+
+                  // Index real matches by sorted team-code pair so each user pick
+                  // can be paired with its real counterpart regardless of date order.
+                  const realByTeamPair = new Map<string, MatchWithScore>();
+                  for (const m of real) {
+                    const key = [m.home.code, m.away.code].sort().join("|");
+                    realByTeamPair.set(key, m);
+                  }
+
+                  // Compute per-pick points: did the user's backed team win?
+                  const stageOc = stageOutcome.get(stage);
+                  const ptsForPick = (pick: KnockoutPick): number | null => {
+                    if (!stageOc) return null;
+                    const w = userPickedWinner(pick);
+                    if (!w) return null;
+                    if (!stageOc.winners.has(w) && !stageOc.losers.has(w)) return null;
+                    return stageOc.winners.has(w) ? (KO_PTS[stage] ?? 0) : 0;
+                  };
+
+                  // Real matches unmatched by any user pick (shown after paired rows).
+                  const matchedRealIds = new Set<string>();
+
                   return (
                     <div key={stage}>
                       <h3 className="mb-3 font-mono text-xs font-bold uppercase tracking-[0.3em]">
                         {STAGE_TITLES[stage]}
                       </h3>
-                      <div className="grid gap-4 md:grid-cols-2">
-                        <div>
-                          <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.28em] text-[var(--foreground-muted)]">
-                            Tu llave
-                          </div>
-                          <ul className="grid gap-3">
-                            {picks.length ? (
-                              picks.map((p) => (
-                                <PredictedMatchCard
-                                  key={p.matchId}
-                                  pick={p}
-                                  advanced={advancedForPick(p)}
-                                />
-                              ))
-                            ) : (
-                              <li className="border border-dashed border-[var(--line)] p-4 text-sm text-[var(--foreground-muted)]">
-                                No completaste esta ronda.
+                      {/* Column headers */}
+                      <div className="mb-1 grid grid-cols-2 gap-3">
+                        <div className="font-mono text-[10px] uppercase tracking-[0.28em] text-[var(--foreground-muted)]">Tu llave</div>
+                        <div className="font-mono text-[10px] uppercase tracking-[0.28em] text-[var(--foreground-muted)]">Resultado real</div>
+                      </div>
+                      {/* Paired rows: user pick → its real counterpart in the same position */}
+                      <div className="grid gap-3">
+                        {picks.length ? (
+                          picks.map((p) => {
+                            const pairKey = [p.homeTeamCode, p.awayTeamCode].sort().join("|");
+                            const realMatch = realByTeamPair.get(pairKey) ?? null;
+                            if (realMatch) matchedRealIds.add(realMatch._id);
+                            return (
+                              <div key={p.matchId} className="grid grid-cols-2 gap-3">
+                                <ul>
+                                  <PredictedMatchCard
+                                    pick={p}
+                                    advanced={advancedForPick(p)}
+                                    pts={ptsForPick(p)}
+                                  />
+                                </ul>
+                                <ul>
+                                  {realMatch ? (
+                                    <RealMatchCard m={realMatch} />
+                                  ) : (
+                                    <li className="border border-dashed border-[var(--line)] p-3 text-xs text-[var(--foreground-muted)]">
+                                      Aún por jugarse.
+                                    </li>
+                                  )}
+                                </ul>
+                              </div>
+                            );
+                          })
+                        ) : (
+                          // No user picks at all for this stage
+                          real.map((m) => (
+                            <div key={m._id} className="grid grid-cols-2 gap-3">
+                              <ul>
+                                <li className="border border-dashed border-[var(--line)] p-3 text-xs text-[var(--foreground-muted)]">
+                                  No completaste esta ronda.
+                                </li>
+                              </ul>
+                              <ul><RealMatchCard m={m} /></ul>
+                            </div>
+                          ))
+                        )}
+                        {/* Any real matches with no matching user pick (should be rare) */}
+                        {real.filter((m) => !matchedRealIds.has(m._id)).map((m) => (
+                          <div key={m._id} className="grid grid-cols-2 gap-3">
+                            <ul>
+                              <li className="border border-dashed border-[var(--line)] p-3 text-xs text-[var(--foreground-muted)]">
+                                Sin pronóstico para este partido.
                               </li>
-                            )}
-                          </ul>
-                        </div>
-                        <div>
-                          <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.28em] text-[var(--foreground-muted)]">
-                            Resultado real
+                            </ul>
+                            <ul><RealMatchCard m={m} /></ul>
                           </div>
-                          <ul className="grid gap-3">
-                            {real.length ? (
-                              real.map((m) => <RealMatchCard key={m._id} m={m} />)
-                            ) : (
-                              <li className="border border-dashed border-[var(--line)] p-4 text-sm text-[var(--foreground-muted)]">
-                                Aún por jugarse.
-                              </li>
-                            )}
-                          </ul>
-                        </div>
+                        ))}
                       </div>
                     </div>
                   );
@@ -746,20 +802,42 @@ export default function PollaResultsPage() {
                       if (!p) return null;
                       const stage = key === "third" ? "THIRD_PLACE" : "FINAL";
                       const real = realByStage.get(stage) ?? [];
+                      // Points for third-place pick only; final pts shown in champion/runner-up block below.
+                      const stageOc = stageOutcome.get(stage);
+                      const pts: number | null = key === "final" ? null : (() => {
+                        if (!stageOc) return null;
+                        const w = userPickedWinner(p);
+                        if (!w) return null;
+                        if (!stageOc.winners.has(w) && !stageOc.losers.has(w)) return null;
+                        return stageOc.winners.has(w) ? (KO_PTS[stage] ?? 0) : 0;
+                      })();
                       return (
                         <div key={key}>
-                          <h3 className="mb-3 font-mono text-xs font-bold uppercase tracking-[0.3em]">
+                          <h3 className="mb-1 font-mono text-xs font-bold uppercase tracking-[0.3em]">
                             {STAGE_TITLES[stage]}
                           </h3>
-                          <ul className="grid gap-3">
-                            <PredictedMatchCard
-                              pick={p}
-                              advanced={advancedForPick(p)}
-                            />
-                            {real.map((m) => (
-                              <RealMatchCard key={m._id} m={m} />
-                            ))}
-                          </ul>
+                          <div className="mb-1 grid grid-cols-2 gap-3">
+                            <div className="font-mono text-[10px] uppercase tracking-[0.28em] text-[var(--foreground-muted)]">Tu llave</div>
+                            <div className="font-mono text-[10px] uppercase tracking-[0.28em] text-[var(--foreground-muted)]">Resultado real</div>
+                          </div>
+                          <div className="grid grid-cols-2 gap-3">
+                            <ul>
+                              <PredictedMatchCard
+                                pick={p}
+                                advanced={advancedForPick(p)}
+                                pts={pts}
+                              />
+                            </ul>
+                            <ul>
+                              {real.length ? (
+                                real.map((m) => <RealMatchCard key={m._id} m={m} />)
+                              ) : (
+                                <li className="border border-dashed border-[var(--line)] p-3 text-xs text-[var(--foreground-muted)]">
+                                  Aún por jugarse.
+                                </li>
+                              )}
+                            </ul>
+                          </div>
                         </div>
                       );
                     })}
