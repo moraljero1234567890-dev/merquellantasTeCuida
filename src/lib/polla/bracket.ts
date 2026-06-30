@@ -368,6 +368,37 @@ export type ActualKnockoutResult = {
   byCode: Record<string, number>;
 };
 
+// Derives the winner code from a pick's user-entered scores (before any real
+// result overwrites them). Used to capture userPredictedWinner in applyActual.
+function userPickWinner(pick: KnockoutPick): string | null {
+  if (pick.home == null || pick.away == null) return null;
+  if (pick.home > pick.away) return pick.homeTeamCode;
+  if (pick.away > pick.home) return pick.awayTeamCode;
+  if (pick.penaltyWinner === "home") return pick.homeTeamCode;
+  if (pick.penaltyWinner === "away") return pick.awayTeamCode;
+  return null;
+}
+
+// Returns the champion derived from the user's ORIGINAL final pick prediction,
+// using the captured userPredictedWinner if available, otherwise falling back
+// to the user's current scores (pre-overwrite). Used in recomputeKnockout so
+// that prediction.champion stays the user's pick even after the final is played.
+export function userPickedChampionFromFinal(
+  final: KnockoutPick | null,
+): { code: string; name: string } | null {
+  if (!final) return null;
+  if (final.userPredictedWinner !== undefined) {
+    const code = final.userPredictedWinner;
+    if (!code) return null;
+    const name =
+      code === final.homeTeamCode ? final.homeTeamName
+      : code === final.awayTeamCode ? final.awayTeamName
+      : "";
+    return { code, name };
+  }
+  return championFromFinal(final);
+}
+
 export function buildKnockoutFromGroup(
   standings: Record<string, StandingRow[]>,
   existing?: PredictionDoc["knockout"],
@@ -389,7 +420,14 @@ export function buildKnockoutFromGroup(
     if (home === away && r.winnerCode) {
       penaltyWinner = r.winnerCode === pick.homeTeamCode ? "home" : "away";
     }
-    return { ...pick, home, away, penaltyWinner };
+    // Capture the user's predicted winner the first time a real result overwrites
+    // this pick. Once set (not undefined), we never change it so the original
+    // prediction is preserved for scoring even after scores are overwritten.
+    const userPredictedWinner =
+      pick.userPredictedWinner !== undefined
+        ? pick.userPredictedWinner
+        : userPickWinner(pick);
+    return { ...pick, home, away, penaltyWinner, userPredictedWinner };
   };
 
   const r32Seeds = r32SeedsOverride ?? buildR32Seeds(standings);
@@ -402,7 +440,7 @@ export function buildKnockoutFromGroup(
       prev.homeTeamCode === fresh.homeTeamCode &&
       prev.awayTeamCode === fresh.awayTeamCode
     ) {
-      return applyActual({ ...fresh, home: prev.home, away: prev.away, penaltyWinner: prev.penaltyWinner });
+      return applyActual({ ...fresh, home: prev.home, away: prev.away, penaltyWinner: prev.penaltyWinner, userPredictedWinner: prev.userPredictedWinner });
     }
     return applyActual(fresh);
   });
@@ -419,7 +457,7 @@ export function buildKnockoutFromGroup(
       prev.homeTeamCode === fresh.homeTeamCode &&
       prev.awayTeamCode === fresh.awayTeamCode
     ) {
-      r16.push(applyActual({ ...fresh, home: prev.home, away: prev.away, penaltyWinner: prev.penaltyWinner }));
+      r16.push(applyActual({ ...fresh, home: prev.home, away: prev.away, penaltyWinner: prev.penaltyWinner, userPredictedWinner: prev.userPredictedWinner }));
     } else {
       r16.push(applyActual(fresh));
     }
@@ -437,7 +475,7 @@ export function buildKnockoutFromGroup(
       prev.homeTeamCode === fresh.homeTeamCode &&
       prev.awayTeamCode === fresh.awayTeamCode
     ) {
-      qf.push(applyActual({ ...fresh, home: prev.home, away: prev.away, penaltyWinner: prev.penaltyWinner }));
+      qf.push(applyActual({ ...fresh, home: prev.home, away: prev.away, penaltyWinner: prev.penaltyWinner, userPredictedWinner: prev.userPredictedWinner }));
     } else {
       qf.push(applyActual(fresh));
     }
@@ -455,7 +493,7 @@ export function buildKnockoutFromGroup(
       prev.homeTeamCode === fresh.homeTeamCode &&
       prev.awayTeamCode === fresh.awayTeamCode
     ) {
-      sf.push(applyActual({ ...fresh, home: prev.home, away: prev.away, penaltyWinner: prev.penaltyWinner }));
+      sf.push(applyActual({ ...fresh, home: prev.home, away: prev.away, penaltyWinner: prev.penaltyWinner, userPredictedWinner: prev.userPredictedWinner }));
     } else {
       sf.push(applyActual(fresh));
     }
@@ -469,7 +507,7 @@ export function buildKnockoutFromGroup(
     thirdPrev &&
     thirdPrev.homeTeamCode === thirdFresh.homeTeamCode &&
     thirdPrev.awayTeamCode === thirdFresh.awayTeamCode
-      ? { ...thirdFresh, home: thirdPrev.home, away: thirdPrev.away, penaltyWinner: thirdPrev.penaltyWinner }
+      ? { ...thirdFresh, home: thirdPrev.home, away: thirdPrev.away, penaltyWinner: thirdPrev.penaltyWinner, userPredictedWinner: thirdPrev.userPredictedWinner }
       : thirdFresh,
   );
 
@@ -481,7 +519,7 @@ export function buildKnockoutFromGroup(
     finalPrev &&
     finalPrev.homeTeamCode === finalFresh.homeTeamCode &&
     finalPrev.awayTeamCode === finalFresh.awayTeamCode
-      ? { ...finalFresh, home: finalPrev.home, away: finalPrev.away, penaltyWinner: finalPrev.penaltyWinner }
+      ? { ...finalFresh, home: finalPrev.home, away: finalPrev.away, penaltyWinner: finalPrev.penaltyWinner, userPredictedWinner: finalPrev.userPredictedWinner }
       : finalFresh,
   );
 

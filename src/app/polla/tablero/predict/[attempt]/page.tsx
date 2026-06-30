@@ -1237,7 +1237,7 @@ export default function PollaPredictPage() {
                             width={col.width}
                           >
                             {col.picks.map((p, i) => {
-                              const stageDisabled = lockedMatchIds.has(p.matchId);
+                              const stageDisabled = !lockStatus?.knockoutOpen || lockedMatchIds.has(p.matchId);
                               return (
                               <BracketSlot
                                 key={p.matchId}
@@ -1285,7 +1285,7 @@ export default function PollaPredictPage() {
                       <BracketCard
                         pick={prediction.knockout.third}
                         size="lg"
-                        disabled={lockedMatchIds.has(prediction.knockout.third.matchId)}
+                        disabled={!lockStatus?.knockoutOpen || lockedMatchIds.has(prediction.knockout.third.matchId)}
                         onChange={(h, a) =>
                           queueKnockoutSave(
                             prediction.knockout.third!.matchId,

@@ -65,6 +65,9 @@ export type KnockoutPick = {
   home: number | null;
   away: number | null;
   penaltyWinner: "home" | "away" | null;
+  // Captured the first time a real result overwrites this pick. Once set, never
+  // changed — preserves the user's original prediction for scoring/display.
+  userPredictedWinner?: string | null;
 };
 
 export type PredictionDoc = {

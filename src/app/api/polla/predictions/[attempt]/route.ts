@@ -14,6 +14,7 @@ import {
   buildKnockoutFromGroup,
   buildR32SeedsFromActual,
   championFromFinal,
+  userPickedChampionFromFinal,
   computeGroupStandings,
   isGroupStageComplete,
 } from "@/lib/polla/bracket";
@@ -87,7 +88,10 @@ async function recomputeKnockout(prediction: PredictionDoc, useActual: boolean):
     }
 
     const knockout = buildKnockoutFromGroup(standings, prediction.knockout, r32Override, actualByPair);
-    const champion = championFromFinal(knockout.final);
+    // Use userPickedChampionFromFinal so prediction.champion always reflects
+    // the user's original pick, even after the final is played and applyActual
+    // overwrites the final pick's home/away with real scores.
+    const champion = userPickedChampionFromFinal(knockout.final);
     return { ...prediction, knockout, champion };
   }
 
@@ -128,9 +132,13 @@ export async function GET(request: NextRequest, ctx: { params: Promise<Params> }
 
   // If actual standings should be used, recompute bracket from actual results
   if (lockStatus.useActualStandings) {
-    prediction = await recomputeKnockout(prediction, true);
-    prediction.updatedAt = new Date();
-    await upsertPrediction(prediction);
+    try {
+      prediction = await recomputeKnockout(prediction, true);
+      prediction.updatedAt = new Date();
+      await upsertPrediction(prediction);
+    } catch (err) {
+      console.error("recomputeKnockout failed (returning raw prediction):", err);
+    }
   }
 
   const lockInfo = await getKnockoutLockInfo();

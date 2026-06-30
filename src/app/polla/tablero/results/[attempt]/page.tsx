@@ -25,9 +25,197 @@ const STAGE_TITLES: Record<KnockoutPick["stage"], string> = {
 type MatchWithScore = ApiMatch & {
   score?: {
     fullTime: { home: number; away: number } | null;
+    penalties?: { home: number; away: number } | null;
   } | null;
   status?: string;
 };
+
+// Each predicted knockout pick lives in the user's OWN fantasy bracket, whose
+// fixtures rarely coincide with the real ones (and whose synthetic slot order
+// differs from Wikipedia's chronological order), so we never pair a pick to a
+// real match by slot index. Instead we compare by TEAM: "did the team you
+// backed to advance from this round actually win its real match in that round?".
+
+// Winning team code of a finished real match (penalties as tiebreak), or null.
+function actualWinnerCode(m: MatchWithScore): string | null {
+  const ft = m.score?.fullTime;
+  if (!ft) return null;
+  if (ft.home > ft.away) return m.home.code;
+  if (ft.away > ft.home) return m.away.code;
+  const pe = m.score?.penalties;
+  if (pe) {
+    if (pe.home > pe.away) return m.home.code;
+    if (pe.away > pe.home) return m.away.code;
+  }
+  return null;
+}
+
+// Winning team code among the user's predicted teams for a pick, or null.
+function predictedWinnerCode(p: KnockoutPick): string | null {
+  if (p.home == null || p.away == null) return null;
+  if (p.home > p.away) return p.homeTeamCode;
+  if (p.away > p.home) return p.awayTeamCode;
+  if (p.penaltyWinner === "home") return p.homeTeamCode;
+  if (p.penaltyWinner === "away") return p.awayTeamCode;
+  return null;
+}
+
+// User's original predicted winner: captured before applyActual overwrote scores.
+// Falls back to predictedWinnerCode for picks not yet overwritten (match still live).
+function userPickedWinner(p: KnockoutPick): string | null {
+  if (p.userPredictedWinner !== undefined) return p.userPredictedWinner;
+  return predictedWinnerCode(p);
+}
+
+const KO_PTS = {
+  ROUND_OF_32: 25,
+  ROUND_OF_16: 50,
+  QUARTER_FINALS: 75,
+  SEMI_FINALS: 100,
+  THIRD_PLACE: 50,
+  CHAMPION: 300,
+  RUNNER_UP: 250,
+  CHAMPION_AND_RUNNER_UP: 350,
+} as const;
+
+function MiniMatch({
+  h,
+  a,
+  home,
+  away,
+  pen,
+}: {
+  h: { name: string; crest: string };
+  a: { name: string; crest: string };
+  home: number | null;
+  away: number | null;
+  pen: boolean;
+}) {
+  return (
+    <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+      <div className="flex items-center justify-end gap-2 text-right text-sm font-bold uppercase tracking-tight">
+        <span>{h.name || "—"}</span>
+        {h.crest && (
+          /* eslint-disable-next-line @next/next/no-img-element */
+          <img
+            src={h.crest}
+            alt=""
+            aria-hidden
+            className="h-6 w-9 shrink-0 border border-[var(--line)] object-cover"
+          />
+        )}
+      </div>
+      <span className="font-mono text-lg font-black tabular-nums">
+        {home != null && away != null
+          ? `${home}–${away}${pen ? " (pen)" : ""}`
+          : "—"}
+      </span>
+      <div className="flex items-center gap-2 text-sm font-bold uppercase tracking-tight">
+        {a.crest && (
+          /* eslint-disable-next-line @next/next/no-img-element */
+          <img
+            src={a.crest}
+            alt=""
+            aria-hidden
+            className="h-6 w-9 shrink-0 border border-[var(--line)] object-cover"
+          />
+        )}
+        <span>{a.name || "—"}</span>
+      </div>
+    </div>
+  );
+}
+
+// One of the user's predicted knockout matches. `advanced` is whether the team
+// they backed to win actually advanced from this round in reality (null = that
+// round hasn't produced results yet). `eliminated` flags a backed team that is
+// already out (lost a real match this round), so the user gets clear feedback.
+function PredictedMatchCard({
+  pick,
+  advanced,
+}: {
+  pick: KnockoutPick;
+  advanced: boolean | null;
+}) {
+  const h = displayTeam(pick.homeTeamCode, pick.homeTeamName);
+  const a = displayTeam(pick.awayTeamCode, pick.awayTeamName);
+  const winnerName =
+    predictedWinnerCode(pick) === pick.homeTeamCode
+      ? h.name
+      : predictedWinnerCode(pick) === pick.awayTeamCode
+        ? a.name
+        : null;
+  return (
+    <li
+      className={`border p-4 ${
+        advanced === true
+          ? "border-emerald-600 bg-emerald-50"
+          : advanced === false
+            ? "border-red-300 bg-red-50/60"
+            : "border-[var(--line)] bg-white"
+      }`}
+    >
+      <MiniMatch
+        h={h}
+        a={a}
+        home={pick.home}
+        away={pick.away}
+        pen={!!pick.penaltyWinner}
+      />
+      {advanced !== null && winnerName && (
+        <div className="mt-2 text-center font-mono text-[10px] font-black uppercase tracking-[0.2em]">
+          {advanced ? (
+            <span className="text-emerald-700">{winnerName} avanzó ✓</span>
+          ) : (
+            <span className="text-red-600">{winnerName} quedó eliminado</span>
+          )}
+        </div>
+      )}
+    </li>
+  );
+}
+
+// Wikipedia labels not-yet-decided bracket slots in English ("Winner Match 75",
+// "Loser Match 101", "Winners Group A"); show a Spanish placeholder instead.
+function realTeamLabel(name: string): string {
+  if (!name || /winner|loser|runner|^1[a-l]$|group/i.test(name)) {
+    return "Por definir";
+  }
+  return name;
+}
+
+// One real knockout fixture (authoritative). Shows the actual teams + score, or
+// the scheduled placeholder when it hasn't been played / drawn yet.
+function RealMatchCard({ m }: { m: MatchWithScore }) {
+  const h = normalizeTeam(m.home);
+  const a = normalizeTeam(m.away);
+  const finished = m.status === "FINISHED" && m.score?.fullTime != null;
+  return (
+    <li className="border border-[var(--line)] bg-white p-4">
+      {finished ? (
+        <MiniMatch
+          h={h}
+          a={a}
+          home={m.score!.fullTime!.home}
+          away={m.score!.fullTime!.away}
+          pen={!!m.score?.penalties}
+        />
+      ) : (
+        <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
+          <span className="text-right text-xs font-bold uppercase tracking-tight text-[var(--foreground-muted)]">
+            {realTeamLabel(h.name)}
+          </span>
+          <span className="font-mono text-[10px] uppercase tracking-[0.2em] text-[var(--foreground-muted)]">
+            vs
+          </span>
+          <span className="text-xs font-bold uppercase tracking-tight text-[var(--foreground-muted)]">
+            {realTeamLabel(a.name)}
+          </span>
+        </div>
+      )}
+    </li>
+  );
+}
 
 function pickClass(
   predicted: { home: number; away: number } | null,
@@ -88,8 +276,13 @@ export default function PollaResultsPage() {
           ? m.matches
           : staticFallback();
         setMatches(arr.length ? arr : staticFallback());
-        setPrediction(p.prediction);
-        setError(null);
+        if (p?.prediction) {
+          setPrediction(p.prediction);
+          setError(null);
+        } else {
+          setPrediction(null);
+          setError(p?.error ?? "No encontramos tu boleta para este intento.");
+        }
       })
       .catch(() => {
         if (cancelled) return;
@@ -116,6 +309,190 @@ export default function PollaResultsPage() {
       return sum + groupMatchResult(prediction.groupScores[m._id] ?? null, actual).points;
     }, 0);
   }, [groupMatches, prediction]);
+
+  const realKnockoutById = useMemo(() => {
+    const map = new Map<string, MatchWithScore>();
+    for (const m of matches) {
+      if (m.stage !== "GROUP_STAGE") map.set(m._id, m);
+    }
+    return map;
+  }, [matches]);
+
+  // Real knockout fixtures grouped by stage, in chronological order — the
+  // authoritative "what actually happened" list shown next to the user's bracket.
+  const realByStage = useMemo(() => {
+    const map = new Map<string, MatchWithScore[]>();
+    for (const m of matches) {
+      if (m.stage === "GROUP_STAGE") continue;
+      const arr = map.get(m.stage) ?? [];
+      arr.push(m);
+      map.set(m.stage, arr);
+    }
+    for (const arr of map.values()) {
+      arr.sort((x, y) =>
+        `${x.date}${x.time}`.localeCompare(`${y.date}${y.time}`),
+      );
+    }
+    return map;
+  }, [matches]);
+
+  // Per real stage: which team codes actually won and which actually lost. Used
+  // to tell whether the team the user backed in a predicted match advanced.
+  const stageOutcome = useMemo(() => {
+    const map = new Map<string, { winners: Set<string>; losers: Set<string> }>();
+    for (const m of matches) {
+      if (m.stage === "GROUP_STAGE") continue;
+      if (m.status !== "FINISHED" || !m.score?.fullTime) continue;
+      const w = actualWinnerCode(m);
+      if (!w) continue;
+      const l = w === m.home.code ? m.away.code : m.home.code;
+      const oc = map.get(m.stage) ?? { winners: new Set(), losers: new Set() };
+      oc.winners.add(w);
+      if (l) oc.losers.add(l);
+      map.set(m.stage, oc);
+    }
+    return map;
+  }, [matches]);
+
+  // Did the team the user backed to win this pick actually advance from that
+  // round? true = won its real match, false = lost it, null = not yet decided.
+  // Uses userPickedWinner so the comparison is against the user's ORIGINAL
+  // prediction even after applyActual overwrote the pick scores with real results.
+  const advancedForPick = (pick: KnockoutPick): boolean | null => {
+    const oc = stageOutcome.get(pick.stage);
+    if (!oc) return null;
+    const w = userPickedWinner(pick);
+    if (!w) return null;
+    if (oc.winners.has(w)) return true;
+    if (oc.losers.has(w)) return false;
+    return null;
+  };
+
+  // Per-round knockout points: for each pick, check if the user's originally
+  // predicted winner (userPredictedWinner, captured before applyActual overwrote
+  // the pick) actually won their round in the real tournament.
+  const knockoutPts = useMemo(() => {
+    const result = { r32: 0, r16: 0, qf: 0, sf: 0, third: 0, champion: 0, runnerUp: 0, total: 0 };
+    if (!prediction) return result;
+
+    const stageWinners = new Map<string, Set<string>>();
+    let realThird: string | null = null;
+    let realChampion: string | null = null;
+    let realRunnerUp: string | null = null;
+
+    for (const m of matches) {
+      if (m.stage === "GROUP_STAGE" || m.status !== "FINISHED" || !m.score?.fullTime) continue;
+      const w = actualWinnerCode(m);
+      if (!w) continue;
+      const l = w === m.home.code ? m.away.code : m.home.code;
+      if (!stageWinners.has(m.stage)) stageWinners.set(m.stage, new Set());
+      stageWinners.get(m.stage)!.add(w);
+      if (m.stage === "THIRD_PLACE") realThird = w;
+      if (m.stage === "FINAL") { realChampion = w; realRunnerUp = l; }
+    }
+
+    const allPicks = [
+      ...prediction.knockout.r32,
+      ...prediction.knockout.r16,
+      ...prediction.knockout.qf,
+      ...prediction.knockout.sf,
+      ...(prediction.knockout.third ? [prediction.knockout.third] : []),
+    ];
+    for (const pick of allPicks) {
+      const upw = userPickedWinner(pick);
+      if (!upw) continue;
+      switch (pick.stage) {
+        case "ROUND_OF_32":
+          if (stageWinners.get("ROUND_OF_32")?.has(upw)) { result.r32 += 1; result.total += KO_PTS.ROUND_OF_32; }
+          break;
+        case "ROUND_OF_16":
+          if (stageWinners.get("ROUND_OF_16")?.has(upw)) { result.r16 += 1; result.total += KO_PTS.ROUND_OF_16; }
+          break;
+        case "QUARTER_FINALS":
+          if (stageWinners.get("QUARTER_FINALS")?.has(upw)) { result.qf += 1; result.total += KO_PTS.QUARTER_FINALS; }
+          break;
+        case "SEMI_FINALS":
+          if (stageWinners.get("SEMI_FINALS")?.has(upw)) { result.sf += 1; result.total += KO_PTS.SEMI_FINALS; }
+          break;
+        case "THIRD_PLACE":
+          if (realThird && upw === realThird) { result.third += 1; result.total += KO_PTS.THIRD_PLACE; }
+          break;
+      }
+    }
+
+    // Champion / runner-up from the final pick
+    const finalPick = prediction.knockout.final;
+    const myChampion = finalPick ? userPickedWinner(finalPick) : null;
+    const myRunnerUp = myChampion && finalPick
+      ? myChampion === finalPick.homeTeamCode ? finalPick.awayTeamCode
+        : myChampion === finalPick.awayTeamCode ? finalPick.homeTeamCode : null
+      : null;
+
+    const gotChampion = !!realChampion && myChampion === realChampion;
+    const gotRunnerUp = !!realRunnerUp && !!myRunnerUp && myRunnerUp === realRunnerUp;
+    if (gotChampion && gotRunnerUp) {
+      result.champion = 1; result.runnerUp = 1; result.total += KO_PTS.CHAMPION_AND_RUNNER_UP;
+    } else if (gotChampion) {
+      result.champion = 1; result.total += KO_PTS.CHAMPION;
+    } else if (gotRunnerUp) {
+      result.runnerUp = 1; result.total += KO_PTS.RUNNER_UP;
+    }
+
+    return result;
+  }, [matches, prediction]);
+
+  // Champion / runner-up display info (separate from scoring).
+  const champ = useMemo(() => {
+    const realFinal = realKnockoutById.get("wiki-FINAL-1") ?? null;
+    const finalFinished =
+      realFinal?.status === "FINISHED" && realFinal?.score?.fullTime != null;
+    const actualChampionCode =
+      finalFinished && realFinal ? actualWinnerCode(realFinal) : null;
+    const actualChampion =
+      realFinal && actualChampionCode === realFinal.home.code
+        ? normalizeTeam(realFinal.home)
+        : realFinal && actualChampionCode === realFinal.away.code
+          ? normalizeTeam(realFinal.away)
+          : null;
+    const actualRunnerUpTeam =
+      realFinal && actualChampionCode === realFinal.home.code
+        ? normalizeTeam(realFinal.away)
+        : realFinal && actualChampionCode === realFinal.away.code
+          ? normalizeTeam(realFinal.home)
+          : null;
+    const actualRunnerUpCode =
+      realFinal && actualChampionCode === realFinal.home.code
+        ? realFinal.away.code
+        : realFinal && actualChampionCode === realFinal.away.code
+          ? realFinal.home.code
+          : null;
+
+    // Use userPickedWinner for the final pick so the display shows the user's
+    // ORIGINAL prediction even after applyActual overwrote the pick with real scores.
+    const myFinal = prediction?.knockout.final ?? null;
+    const myChampionCode = myFinal ? userPickedWinner(myFinal) : (prediction?.champion?.code ?? null);
+    const myRunnerUpCode = myChampionCode && myFinal
+      ? myChampionCode === myFinal.homeTeamCode ? myFinal.awayTeamCode
+        : myChampionCode === myFinal.awayTeamCode ? myFinal.homeTeamCode : null
+      : null;
+
+    const championCorrect =
+      actualChampionCode != null && myChampionCode === actualChampionCode;
+    const runnerUpCorrect =
+      actualRunnerUpCode != null &&
+      myRunnerUpCode != null &&
+      myRunnerUpCode === actualRunnerUpCode;
+
+    return {
+      decided: !!actualChampionCode,
+      actualChampion,
+      actualRunnerUpTeam,
+      championCorrect,
+      runnerUpCorrect,
+      myChampionCode,
+      myRunnerUpCode,
+    };
+  }, [realKnockoutById, prediction]);
 
   const handleLogout = logout;
 
@@ -166,10 +543,16 @@ export default function PollaResultsPage() {
           </div>
         </section>
 
-        {loading || !prediction ? (
+        {loading ? (
           <section className="mx-auto max-w-6xl px-6 py-12">
             <div className="border border-dashed border-[var(--line)] bg-white p-12 text-center text-sm text-[var(--foreground-muted)]">
-              Cargando...
+              Cargando resultados...
+            </div>
+          </section>
+        ) : !prediction ? (
+          <section className="mx-auto max-w-6xl px-6 py-12">
+            <div className="border border-dashed border-[var(--line)] bg-white p-12 text-center text-sm text-[var(--foreground-muted)]">
+              {error ?? "No encontramos tu boleta para este intento."}
             </div>
           </section>
         ) : (
@@ -279,9 +662,27 @@ export default function PollaResultsPage() {
             </section>
 
             <section className="mx-auto max-w-6xl px-6 pb-16">
-              <h2 className="border-b border-[var(--foreground)] pb-2 font-mono text-xs font-bold uppercase tracking-[0.3em]">
-                Eliminatorias (tu llave)
+              <h2 className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--foreground)] pb-2 font-mono text-xs font-bold uppercase tracking-[0.3em]">
+                <span>Eliminatorias · tu pronóstico vs. real</span>
+                <span className="text-[var(--brand)]">
+                  {knockoutPts.total} pts eliminatorias
+                </span>
               </h2>
+              <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-[var(--foreground-soft)]">
+                {knockoutPts.r32 > 0 && <span>32avos: <strong>{knockoutPts.r32}×25</strong></span>}
+                {knockoutPts.r16 > 0 && <span>Octavos: <strong>{knockoutPts.r16}×50</strong></span>}
+                {knockoutPts.qf > 0 && <span>Cuartos: <strong>{knockoutPts.qf}×75</strong></span>}
+                {knockoutPts.sf > 0 && <span>Semis: <strong>{knockoutPts.sf}×100</strong></span>}
+                {knockoutPts.third > 0 && <span>3er puesto: <strong>+50</strong></span>}
+                {knockoutPts.champion > 0 && <span>Campeón: <strong>+{knockoutPts.runnerUp ? "350 (ambos)" : "300"}</strong></span>}
+                {knockoutPts.runnerUp > 0 && !knockoutPts.champion && <span>Subcampeón: <strong>+250</strong></span>}
+              </div>
+              <p className="mt-2 text-sm text-[var(--foreground-muted)]">
+                Puntos por acertar quién avanza en cada ronda:{" "}
+                32avos 25 pts · Octavos 50 pts · Cuartos 75 pts · Semis 100 pts.
+                Campeón 300 · Subcampeón 250 (350 si aciertas ambos).{" "}
+                <span className="text-emerald-700">Verde</span> = acertaste quién avanza.
+              </p>
               <div className="mt-6 grid gap-8">
                 {(
                   [
@@ -291,54 +692,49 @@ export default function PollaResultsPage() {
                     { stage: "SEMI_FINALS" as const, picks: prediction.knockout.sf },
                   ] as const
                 ).map(({ stage, picks }) => {
-                  if (!picks.length) return null;
+                  const real = realByStage.get(stage) ?? [];
+                  if (!picks.length && !real.length) return null;
                   return (
                     <div key={stage}>
                       <h3 className="mb-3 font-mono text-xs font-bold uppercase tracking-[0.3em]">
                         {STAGE_TITLES[stage]}
                       </h3>
-                      <ul className="grid gap-3 md:grid-cols-2">
-                        {picks.map((p) => {
-                          const h = displayTeam(p.homeTeamCode, p.homeTeamName);
-                          const a = displayTeam(p.awayTeamCode, p.awayTeamName);
-                          return (
-                            <li
-                              key={p.matchId}
-                              className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 border border-[var(--line)] bg-white p-4"
-                            >
-                              <div className="flex items-center justify-end gap-2 text-right text-sm font-bold uppercase tracking-tight">
-                                <span>{h.name || "—"}</span>
-                                {h.crest && (
-                                  /* eslint-disable-next-line @next/next/no-img-element */
-                                  <img
-                                    src={h.crest}
-                                    alt=""
-                                    aria-hidden
-                                    className="h-6 w-9 shrink-0 border border-[var(--line)] object-cover"
-                                  />
-                                )}
-                              </div>
-                              <span className="font-mono text-lg font-black tabular-nums">
-                                {p.home != null && p.away != null
-                                  ? `${p.home}–${p.away}${p.penaltyWinner ? " (pen)" : ""}`
-                                  : "—"}
-                              </span>
-                              <div className="flex items-center gap-2 text-sm font-bold uppercase tracking-tight">
-                                {a.crest && (
-                                  /* eslint-disable-next-line @next/next/no-img-element */
-                                  <img
-                                    src={a.crest}
-                                    alt=""
-                                    aria-hidden
-                                    className="h-6 w-9 shrink-0 border border-[var(--line)] object-cover"
-                                  />
-                                )}
-                                <span>{a.name || "—"}</span>
-                              </div>
-                            </li>
-                          );
-                        })}
-                      </ul>
+                      <div className="grid gap-4 md:grid-cols-2">
+                        <div>
+                          <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.28em] text-[var(--foreground-muted)]">
+                            Tu llave
+                          </div>
+                          <ul className="grid gap-3">
+                            {picks.length ? (
+                              picks.map((p) => (
+                                <PredictedMatchCard
+                                  key={p.matchId}
+                                  pick={p}
+                                  advanced={advancedForPick(p)}
+                                />
+                              ))
+                            ) : (
+                              <li className="border border-dashed border-[var(--line)] p-4 text-sm text-[var(--foreground-muted)]">
+                                No completaste esta ronda.
+                              </li>
+                            )}
+                          </ul>
+                        </div>
+                        <div>
+                          <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.28em] text-[var(--foreground-muted)]">
+                            Resultado real
+                          </div>
+                          <ul className="grid gap-3">
+                            {real.length ? (
+                              real.map((m) => <RealMatchCard key={m._id} m={m} />)
+                            ) : (
+                              <li className="border border-dashed border-[var(--line)] p-4 text-sm text-[var(--foreground-muted)]">
+                                Aún por jugarse.
+                              </li>
+                            )}
+                          </ul>
+                        </div>
+                      </div>
                     </div>
                   );
                 })}
@@ -348,61 +744,98 @@ export default function PollaResultsPage() {
                     {(["third", "final"] as const).map((key) => {
                       const p = prediction.knockout[key];
                       if (!p) return null;
-                      const h = displayTeam(p.homeTeamCode, p.homeTeamName);
-                      const a = displayTeam(p.awayTeamCode, p.awayTeamName);
+                      const stage = key === "third" ? "THIRD_PLACE" : "FINAL";
+                      const real = realByStage.get(stage) ?? [];
                       return (
                         <div key={key}>
                           <h3 className="mb-3 font-mono text-xs font-bold uppercase tracking-[0.3em]">
-                            {STAGE_TITLES[key === "third" ? "THIRD_PLACE" : "FINAL"]}
+                            {STAGE_TITLES[stage]}
                           </h3>
-                          <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-3 border border-[var(--line)] bg-white p-4">
-                            <div className="flex items-center justify-end gap-2 text-right text-sm font-bold uppercase tracking-tight">
-                              <span>{h.name || "—"}</span>
-                              {h.crest && (
-                                /* eslint-disable-next-line @next/next/no-img-element */
-                                <img
-                                  src={h.crest}
-                                  alt=""
-                                  aria-hidden
-                                  className="h-6 w-9 shrink-0 border border-[var(--line)] object-cover"
-                                />
-                              )}
-                            </div>
-                            <span className="font-mono text-lg font-black tabular-nums">
-                              {p.home != null && p.away != null
-                                ? `${p.home}–${p.away}${p.penaltyWinner ? " (pen)" : ""}`
-                                : "—"}
-                            </span>
-                            <div className="flex items-center gap-2 text-sm font-bold uppercase tracking-tight">
-                              {a.crest && (
-                                /* eslint-disable-next-line @next/next/no-img-element */
-                                <img
-                                  src={a.crest}
-                                  alt=""
-                                  aria-hidden
-                                  className="h-6 w-9 shrink-0 border border-[var(--line)] object-cover"
-                                />
-                              )}
-                              <span>{a.name || "—"}</span>
-                            </div>
-                          </div>
+                          <ul className="grid gap-3">
+                            <PredictedMatchCard
+                              pick={p}
+                              advanced={advancedForPick(p)}
+                            />
+                            {real.map((m) => (
+                              <RealMatchCard key={m._id} m={m} />
+                            ))}
+                          </ul>
                         </div>
                       );
                     })}
                   </div>
                 )}
 
-                {prediction.champion && (
-                  <div className="border-l-4 border-[var(--brand)] bg-[var(--brand-soft)] p-8">
-                    <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-[var(--brand-dark)]">
-                      Tu campeón pronosticado
-                    </p>
-                    <p className="mt-3 text-4xl font-black uppercase tracking-tight text-[var(--brand-dark)]">
-                      {displayTeam(
-                        prediction.champion.code,
-                        prediction.champion.name,
-                      ).name}
-                    </p>
+                {(prediction.champion || prediction.knockout.final) && (
+                  <div className="grid gap-4 md:grid-cols-2">
+                    {champ.myChampionCode && (
+                      <div
+                        className={`border-l-4 p-8 ${
+                          champ.decided
+                            ? champ.championCorrect
+                              ? "border-emerald-600 bg-emerald-50"
+                              : "border-red-400 bg-red-50/60"
+                            : "border-[var(--brand)] bg-[var(--brand-soft)]"
+                        }`}
+                      >
+                        <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-[var(--brand-dark)]">
+                          Tu campeón pronosticado
+                        </p>
+                        <p className="mt-3 text-4xl font-black uppercase tracking-tight text-[var(--brand-dark)]">
+                          {displayTeam(
+                            champ.myChampionCode,
+                            champ.myChampionCode === prediction.knockout.final?.homeTeamCode
+                              ? prediction.knockout.final.homeTeamName
+                              : prediction.knockout.final?.awayTeamName ?? prediction.champion?.name ?? "",
+                          ).name}
+                        </p>
+                        {champ.decided && (
+                          <p className="mt-3 font-mono text-xs font-bold uppercase tracking-[0.2em]">
+                            Real: {champ.actualChampion?.name ?? "—"}{" "}
+                            {champ.championCorrect ? (
+                              <span className="text-emerald-700">✓ +300</span>
+                            ) : (
+                              <span className="text-red-600">✗</span>
+                            )}
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    {champ.myRunnerUpCode && prediction.knockout.final && (
+                      <div
+                        className={`border-l-4 p-8 ${
+                          champ.decided
+                            ? champ.runnerUpCorrect
+                              ? "border-emerald-600 bg-emerald-50"
+                              : "border-red-400 bg-red-50/60"
+                            : "border-[var(--line)] bg-white"
+                        }`}
+                      >
+                        <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-[var(--foreground-muted)]">
+                          Tu subcampeón (perdedor de tu final)
+                        </p>
+                        <p className="mt-3 text-4xl font-black uppercase tracking-tight">
+                          {(() => {
+                            const f = prediction.knockout.final;
+                            const ruCode = champ.myRunnerUpCode;
+                            const ruName =
+                              ruCode === f.homeTeamCode ? f.homeTeamName
+                              : ruCode === f.awayTeamCode ? f.awayTeamName : "";
+                            return ruCode ? displayTeam(ruCode, ruName).name : "—";
+                          })()}
+                        </p>
+                        {champ.decided && (
+                          <p className="mt-3 font-mono text-xs font-bold uppercase tracking-[0.2em]">
+                            Real: {champ.actualRunnerUpTeam?.name ?? "—"}{" "}
+                            {champ.runnerUpCorrect ? (
+                              <span className="text-emerald-700">✓ +250</span>
+                            ) : (
+                              <span className="text-red-600">✗</span>
+                            )}
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
               </div>

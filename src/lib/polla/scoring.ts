@@ -6,6 +6,11 @@ export const POINTS = {
   GROUP_OUTCOME: 30,
   GROUP_EXACT: 50,
   GROUP_GOAL_DIFF: 20,
+  KO_R32: 25,
+  KO_R16: 50,
+  KO_QF: 75,
+  KO_SF: 100,
+  KO_THIRD: 50,
   CHAMPION: 300,
   RUNNER_UP: 250,
   CHAMPION_AND_RUNNER_UP: 350,
@@ -19,6 +24,11 @@ export type ScoreBreakdown = {
     points: number;
   };
   knockout: {
+    r32: number;
+    r16: number;
+    qf: number;
+    sf: number;
+    third: number;
     runnerUp: number;
     champion: number;
     points: number;
@@ -64,15 +74,19 @@ function finishedGroupMatches(matches: MatchDoc[]): FinishedGroupMatch[] {
 }
 
 function knockoutWinnersByStage(matches: MatchDoc[]): {
+  r32: Set<string>;
   r16: Set<string>;
   qf: Set<string>;
   sf: Set<string>;
+  third: string | null;
   champion: string | null;
   runnerUp: string | null;
 } {
+  const r32 = new Set<string>();
   const r16 = new Set<string>();
   const qf = new Set<string>();
   const sf = new Set<string>();
+  let third: string | null = null;
   let champion: string | null = null;
   let runnerUp: string | null = null;
 
@@ -92,6 +106,9 @@ function knockoutWinnersByStage(matches: MatchDoc[]): {
     const loserCode = winnerCode === m.home.code ? m.away.code : m.home.code;
 
     switch (m.stage) {
+      case "ROUND_OF_32":
+        r32.add(winnerCode);
+        break;
       case "ROUND_OF_16":
         r16.add(winnerCode);
         break;
@@ -100,6 +117,9 @@ function knockoutWinnersByStage(matches: MatchDoc[]): {
         break;
       case "SEMI_FINALS":
         sf.add(winnerCode);
+        break;
+      case "THIRD_PLACE":
+        third = winnerCode;
         break;
       case "FINAL":
         champion = winnerCode;
@@ -110,7 +130,7 @@ function knockoutWinnersByStage(matches: MatchDoc[]): {
     }
   }
 
-  return { r16, qf, sf, champion, runnerUp };
+  return { r32, r16, qf, sf, third, champion, runnerUp };
 }
 
 function pickedWinnerCode(p: KnockoutPick): string | null {
@@ -125,7 +145,7 @@ function pickedWinnerCode(p: KnockoutPick): string | null {
 function emptyBreakdown(): ScoreBreakdown {
   return {
     group: { outcomes: 0, exact: 0, goalDiff: 0, points: 0 },
-    knockout: { runnerUp: 0, champion: 0, points: 0 },
+    knockout: { r32: 0, r16: 0, qf: 0, sf: 0, third: 0, runnerUp: 0, champion: 0, points: 0 },
     bonus: 0,
     total: 0,
   };
@@ -174,21 +194,64 @@ export function computeLeaderboard(
       br.group.points += points;
     }
 
-    const gotChampion = knockReal.champion && p.champion?.code === knockReal.champion;
-    let gotRunnerUp = false;
-    if (knockReal.runnerUp && p.knockout.final) {
-      const finalPick = p.knockout.final;
-      const winner = pickedWinnerCode(finalPick);
-      const loser =
-        winner === finalPick.homeTeamCode
-          ? finalPick.awayTeamCode
-          : winner === finalPick.awayTeamCode
-            ? finalPick.homeTeamCode
-            : null;
-      if (loser && loser === knockReal.runnerUp) {
-        gotRunnerUp = true;
+    // Per-round knockout scoring: award points for each team the user correctly
+    // predicted to advance from that round. userPredictedWinner is captured before
+    // applyActual overwrites the pick scores, so it always reflects the user's
+    // original prediction even for already-finished matches.
+    const allKnockoutPicks = [
+      ...p.knockout.r32,
+      ...p.knockout.r16,
+      ...p.knockout.qf,
+      ...p.knockout.sf,
+      ...(p.knockout.third ? [p.knockout.third] : []),
+    ];
+    for (const pick of allKnockoutPicks) {
+      // Prefer the captured userPredictedWinner; fall back to live pick scores
+      // for matches not yet overwritten (i.e. not yet finished).
+      const upw =
+        pick.userPredictedWinner !== undefined
+          ? pick.userPredictedWinner
+          : pickedWinnerCode(pick);
+      if (!upw) continue;
+      switch (pick.stage) {
+        case "ROUND_OF_32":
+          if (knockReal.r32.has(upw)) { br.knockout.r32 += 1; br.knockout.points += POINTS.KO_R32; }
+          break;
+        case "ROUND_OF_16":
+          if (knockReal.r16.has(upw)) { br.knockout.r16 += 1; br.knockout.points += POINTS.KO_R16; }
+          break;
+        case "QUARTER_FINALS":
+          if (knockReal.qf.has(upw)) { br.knockout.qf += 1; br.knockout.points += POINTS.KO_QF; }
+          break;
+        case "SEMI_FINALS":
+          if (knockReal.sf.has(upw)) { br.knockout.sf += 1; br.knockout.points += POINTS.KO_SF; }
+          break;
+        case "THIRD_PLACE":
+          if (knockReal.third && upw === knockReal.third) { br.knockout.third += 1; br.knockout.points += POINTS.KO_THIRD; }
+          break;
       }
     }
+
+    // Champion / runner-up: use userPredictedWinner on the final pick so scoring
+    // stays correct after the final is played and applyActual overwrites the scores.
+    const finalPick = p.knockout.final;
+    const myChampion =
+      finalPick
+        ? finalPick.userPredictedWinner !== undefined
+          ? finalPick.userPredictedWinner
+          : pickedWinnerCode(finalPick)
+        : null;
+    const myRunnerUp =
+      myChampion && finalPick
+        ? myChampion === finalPick.homeTeamCode
+          ? finalPick.awayTeamCode
+          : myChampion === finalPick.awayTeamCode
+            ? finalPick.homeTeamCode
+            : null
+        : null;
+
+    const gotChampion = !!knockReal.champion && myChampion === knockReal.champion;
+    const gotRunnerUp = !!knockReal.runnerUp && !!myRunnerUp && myRunnerUp === knockReal.runnerUp;
 
     if (gotChampion && gotRunnerUp) {
       br.knockout.champion = 1;

@@ -146,41 +146,81 @@ export async function maybeRefreshMatches(): Promise<void> {
  * results in place. Deliberately conservative so an automatic refresh can never
  * corrupt the board:
  *
- *  - Only updates matches whose `_id` already exists. The initial seed creates
- *    every group + knockout fixture, and predictions are keyed to those ids, so
- *    a provider whose id scheme differs would otherwise inject a duplicate set
- *    of matches that no prediction lines up with. We skip unknown ids instead.
+ *  - Tries to match by `_id` first. If not found, falls back to matching by
+ *    team codes + stage (handles the case where the DB was seeded from the
+ *    static fallback with team-based IDs like "A1-mx-no" while Wikipedia
+ *    generates "wiki-GA1" IDs — in that case we update status/score only,
+ *    preserving the original _id so existing predictions still line up).
+ *  - Wikipedia knockout fixtures that have no match (by id OR by teams) are
+ *    inserted so they become queryable once teams are known.
  *  - Never downgrades a match that is already FINISHED with a score back to a
  *    scheduled / scoreless state, so a transient provider gap can't wipe a real
  *    result that users have already been scored against.
  */
 export async function applyProviderResults(
   docs: MatchDoc[],
-): Promise<{ updated: number; skipped: number; unknown: number }> {
+): Promise<{ updated: number; skipped: number; unknown: number; inserted: number }> {
   const col = await pollaMatchesCollection();
   const existing = await col.find({}).toArray();
   const byId = new Map(existing.map((m) => [m._id, m]));
+
+  // Secondary index by stage + both team-code orderings (handles home/away swaps
+  // between seed and provider, e.g. static seed has mx|no, Wikipedia has no|mx).
+  const byTeams = new Map<string, MatchDoc>();
+  for (const m of existing) {
+    if (!m.home?.code || !m.away?.code) continue;
+    byTeams.set(`${m.stage}|${m.home.code}|${m.away.code}`, m);
+    byTeams.set(`${m.stage}|${m.away.code}|${m.home.code}`, m);
+  }
+
   let updated = 0;
   let skipped = 0;
   let unknown = 0;
+  let inserted = 0;
+
   for (const d of docs) {
-    const prev = byId.get(d._id);
-    if (!prev) {
+    // --- Primary lookup: exact _id match ---
+    const prevById = byId.get(d._id);
+    if (prevById) {
+      const prevHasResult = prevById.status === "FINISHED" && prevById.score?.fullTime != null;
+      const nextHasResult = d.status === "FINISHED" && d.score?.fullTime != null;
+      if (prevHasResult && !nextHasResult) { skipped += 1; continue; }
+      await col.replaceOne({ _id: d._id }, d);
+      updated += 1;
+      continue;
+    }
+
+    // --- Secondary lookup: match by team codes (handles seed/provider ID mismatch) ---
+    const teamKey = `${d.stage}|${d.home?.code}|${d.away?.code}`;
+    const prevByTeams = d.home?.code && d.away?.code ? byTeams.get(teamKey) : undefined;
+    if (prevByTeams) {
+      const prevHasResult = prevByTeams.status === "FINISHED" && prevByTeams.score?.fullTime != null;
+      const nextHasResult = d.status === "FINISHED" && d.score?.fullTime != null;
+      if (prevHasResult && !nextHasResult) { skipped += 1; continue; }
+      // Keep the original _id so predictions keyed to it stay valid.
+      // Only update score/status — don't replace home/away names since the
+      // existing doc was used when the user filled out their boleta.
+      await col.updateOne(
+        { _id: prevByTeams._id },
+        { $set: { status: d.status, score: d.score } },
+      );
+      updated += 1;
+      continue;
+    }
+
+    // --- No match found: insert Wikipedia knockout fixtures ---
+    if (d.source === "wikipedia" && d.stage !== "GROUP_STAGE") {
+      await col.insertOne(d);
+      byId.set(d._id, d);
+      byTeams.set(`${d.stage}|${d.home?.code}|${d.away?.code}`, d);
+      byTeams.set(`${d.stage}|${d.away?.code}|${d.home?.code}`, d);
+      inserted += 1;
+    } else {
       unknown += 1;
-      continue;
     }
-    const prevHasResult =
-      prev.status === "FINISHED" && prev.score?.fullTime != null;
-    const nextHasResult =
-      d.status === "FINISHED" && d.score?.fullTime != null;
-    if (prevHasResult && !nextHasResult) {
-      skipped += 1;
-      continue;
-    }
-    await col.replaceOne({ _id: d._id }, d);
-    updated += 1;
   }
-  return { updated, skipped, unknown };
+
+  return { updated, skipped, unknown, inserted };
 }
 
 export async function getPollaUserByCedula(identifier: string): Promise<PollaLoginResult | null> {
@@ -302,12 +342,22 @@ export async function getLockStatus(): Promise<LockStatus> {
     return { groupLocked: true, knockoutOpen: false, editableStages: [], allGroupFinished: false, useActualStandings: false };
   }
 
-  // Live knockout phase: the group stage is locked, but users predict the REAL
-  // bracket and may edit each game until it kicks off. Locking is per-MATCH (a
-  // game closes at its own kickoff — see getKnockoutLockInfo / lockedKnockoutMatchIds),
-  // not per-stage, so an already-played game is locked while the rest stay open.
-  // The champion stays editable until the real final kicks off. useActualStandings
-  // makes the bracket show the real fixtures.
+  // Knockout editing deadline: Sun Jun 29 2026 19:00 UTC (2:00 PM Colombia, UTC-5).
+  // Past this date all editing is closed; useActualStandings stays true so the
+  // results page can still rebuild brackets and show real scores.
+  const KNOCKOUT_DEADLINE = new Date("2026-06-29T19:00:00Z");
+  if (now >= KNOCKOUT_DEADLINE) {
+    return {
+      groupLocked: true,
+      knockoutOpen: false,
+      editableStages: [],
+      allGroupFinished: true,
+      useActualStandings: true,
+    };
+  }
+
+  // Live knockout phase: the group stage is locked, but users may edit each
+  // game until it kicks off (per-match lock via getKnockoutLockInfo).
   return {
     groupLocked: true,
     knockoutOpen: true,
