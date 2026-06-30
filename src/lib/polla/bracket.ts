@@ -440,7 +440,26 @@ export function buildKnockoutFromGroup(
       prev.homeTeamCode === fresh.homeTeamCode &&
       prev.awayTeamCode === fresh.awayTeamCode
     ) {
+      // Full match: preserve user's score and captured winner.
       return applyActual({ ...fresh, home: prev.home, away: prev.away, penaltyWinner: prev.penaltyWinner, userPredictedWinner: prev.userPredictedWinner });
+    }
+    if (
+      prev &&
+      prev.homeTeamCode === fresh.homeTeamCode &&
+      fresh.homeTeamCode !== ""
+    ) {
+      // Home (anchor group winner/runner-up) matches but the away slot changed —
+      // this is a 3rd-place opponent mismatch: our buildR32Seeds assigned a
+      // different valid 3rd-place team than FIFA's official bracket. The user
+      // still has a meaningful prediction: infer who they backed from their
+      // original scores and carry that forward so they can earn R32 points if
+      // the anchor team they backed actually won.
+      const prevWinner = userPickWinner(prev);
+      // Only credit if they backed the home (anchor) team; if they backed the
+      // predicted-wrong away team, that team isn't in the real match.
+      const capturedWinner =
+        prevWinner === prev.homeTeamCode ? prev.homeTeamCode : null;
+      return applyActual({ ...fresh, userPredictedWinner: capturedWinner });
     }
     return applyActual(fresh);
   });
