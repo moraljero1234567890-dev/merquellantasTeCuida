@@ -260,29 +260,41 @@ export function computeLeaderboard(
       const realAway = entry.homeCode === pick.homeTeamCode ? entry.ft.away : entry.ft.home;
       const userHome = pick.userPredictedHome !== undefined ? pick.userPredictedHome : pick.home;
       const userAway = pick.userPredictedAway !== undefined ? pick.userPredictedAway : pick.away;
-      if (userHome == null || userAway == null) continue;
+      const hasScore = userHome != null && userAway != null;
 
-      if (userHome === realHome && userAway === realAway) {
+      // Exact score (requires both predicted scores)
+      if (hasScore && userHome === realHome && userAway === realAway) {
         br.knockout.exact += 1;
         br.knockout.points += POINTS.KO_EXACT_WIN;
         continue;
       }
 
       const realIsDraw = realHome === realAway;
-      const predictedDraw =
-        pick.userPredictedDraw === true
-          ? true
-          : userHome === userAway;
 
-      if (realIsDraw && predictedDraw) {
-        br.knockout.winner += 1;
-        br.knockout.points += POINTS.KO_WIN;
-      } else if (!realIsDraw) {
+      if (hasScore) {
+        // Full score prediction: award winner/draw points if applicable.
+        const predictedDraw =
+          pick.userPredictedDraw === true
+            ? true
+            : userHome === userAway;
+        if (realIsDraw && predictedDraw) {
+          br.knockout.winner += 1;
+          br.knockout.points += POINTS.KO_WIN;
+        } else if (!realIsDraw && !predictedDraw) {
+          const realWinnerCode = realHome > realAway ? pick.homeTeamCode : pick.awayTeamCode;
+          const upw = pick.userPredictedWinner !== undefined
+            ? pick.userPredictedWinner
+            : pickedWinnerCode(pick);
+          if (upw === realWinnerCode) {
+            br.knockout.winner += 1;
+            br.knockout.points += POINTS.KO_WIN;
+          }
+        }
+      } else if (!realIsDraw && pick.userPredictedWinner != null) {
+        // No captured score (e.g. user had wrong 3rd-place opponent in this slot)
+        // but an explicit winner was captured — award winner points if correct.
         const realWinnerCode = realHome > realAway ? pick.homeTeamCode : pick.awayTeamCode;
-        const upw = pick.userPredictedWinner !== undefined
-          ? pick.userPredictedWinner
-          : pickedWinnerCode(pick);
-        if (upw === realWinnerCode) {
+        if (pick.userPredictedWinner === realWinnerCode) {
           br.knockout.winner += 1;
           br.knockout.points += POINTS.KO_WIN;
         }

@@ -531,23 +531,33 @@ export default function PollaResultsPage() {
       // overwritten by applyActual) are treated as "no prediction" and skip scoring.
       const userHome = pick.userPredictedHome !== undefined ? pick.userPredictedHome : pick.home;
       const userAway = pick.userPredictedAway !== undefined ? pick.userPredictedAway : pick.away;
-      if (userHome == null || userAway == null) continue;
+      const hasScore = userHome != null && userAway != null;
 
-      if (userHome === realHome && userAway === realAway) {
+      if (hasScore && userHome === realHome && userAway === realAway) {
         result.exact += 1;
         result.total += KO_EXACT_WIN;
         continue;
       }
 
       const realIsDraw = realHome === realAway;
-      const predictedDraw = userHome === userAway;
-      if (realIsDraw && predictedDraw) {
-        result.winner += 1;
-        result.total += KO_WIN;
-      } else if (!realIsDraw && !predictedDraw) {
+      if (hasScore) {
+        const predictedDraw = userHome === userAway;
+        if (realIsDraw && predictedDraw) {
+          result.winner += 1;
+          result.total += KO_WIN;
+        } else if (!realIsDraw && !predictedDraw) {
+          const realWinnerCode = realHome > realAway ? pick.homeTeamCode : pick.awayTeamCode;
+          const userWinnerCode = userHome > userAway ? pick.homeTeamCode : pick.awayTeamCode;
+          if (userWinnerCode === realWinnerCode) {
+            result.winner += 1;
+            result.total += KO_WIN;
+          }
+        }
+      } else if (!realIsDraw && pick.userPredictedWinner != null) {
+        // No captured score (e.g. user had wrong 3rd-place opponent in this slot)
+        // but explicit winner captured — award winner points if correct.
         const realWinnerCode = realHome > realAway ? pick.homeTeamCode : pick.awayTeamCode;
-        const userWinnerCode = userHome > userAway ? pick.homeTeamCode : pick.awayTeamCode;
-        if (userWinnerCode === realWinnerCode) {
+        if (pick.userPredictedWinner === realWinnerCode) {
           result.winner += 1;
           result.total += KO_WIN;
         }
@@ -862,15 +872,21 @@ export default function PollaResultsPage() {
                     // (empty picks overwritten by applyActual) are treated as no prediction.
                     const userHome = pick.userPredictedHome !== undefined ? pick.userPredictedHome : pick.home;
                     const userAway = pick.userPredictedAway !== undefined ? pick.userPredictedAway : pick.away;
-                    if (userHome == null || userAway == null) return null;
-                    if (userHome === realHome && userAway === realAway) return KO_EXACT_WIN;
+                    const hasScore = userHome != null && userAway != null;
+                    if (hasScore && userHome === realHome && userAway === realAway) return KO_EXACT_WIN;
                     const realIsDraw = realHome === realAway;
-                    const predictedDraw = userHome === userAway;
-                    if (realIsDraw && predictedDraw) return KO_WIN;
-                    if (!realIsDraw && !predictedDraw) {
+                    if (hasScore) {
+                      const predictedDraw = userHome === userAway;
+                      if (realIsDraw && predictedDraw) return KO_WIN;
+                      if (!realIsDraw && !predictedDraw) {
+                        const realWinnerCode = realHome > realAway ? pick.homeTeamCode : pick.awayTeamCode;
+                        const userWinnerCode = userHome > userAway ? pick.homeTeamCode : pick.awayTeamCode;
+                        if (userWinnerCode === realWinnerCode) return KO_WIN;
+                      }
+                      return 0;
+                    } else if (!realIsDraw && pick.userPredictedWinner != null) {
                       const realWinnerCode = realHome > realAway ? pick.homeTeamCode : pick.awayTeamCode;
-                      const userWinnerCode = userHome > userAway ? pick.homeTeamCode : pick.awayTeamCode;
-                      if (userWinnerCode === realWinnerCode) return KO_WIN;
+                      if (pick.userPredictedWinner === realWinnerCode) return KO_WIN;
                     }
                     return 0;
                   };
@@ -969,15 +985,21 @@ export default function PollaResultsPage() {
                         const realAway = real.home.code === p.homeTeamCode ? ft.away : ft.home;
                         const userHome = p.userPredictedHome !== undefined ? p.userPredictedHome : p.home;
                         const userAway = p.userPredictedAway !== undefined ? p.userPredictedAway : p.away;
-                        if (userHome == null || userAway == null) return null;
-                        if (userHome === realHome && userAway === realAway) return KO_EXACT_WIN;
+                        const hasScore = userHome != null && userAway != null;
+                        if (hasScore && userHome === realHome && userAway === realAway) return KO_EXACT_WIN;
                         const realIsDraw = realHome === realAway;
-                        const predictedDraw = userHome === userAway;
-                        if (realIsDraw && predictedDraw) return KO_WIN;
-                        if (!realIsDraw && !predictedDraw) {
+                        if (hasScore) {
+                          const predictedDraw = userHome === userAway;
+                          if (realIsDraw && predictedDraw) return KO_WIN;
+                          if (!realIsDraw && !predictedDraw) {
+                            const realWinnerCode = realHome > realAway ? p.homeTeamCode : p.awayTeamCode;
+                            const userWinnerCode = userHome > userAway ? p.homeTeamCode : p.awayTeamCode;
+                            if (userWinnerCode === realWinnerCode) return KO_WIN;
+                          }
+                          return 0;
+                        } else if (!realIsDraw && p.userPredictedWinner != null) {
                           const realWinnerCode = realHome > realAway ? p.homeTeamCode : p.awayTeamCode;
-                          const userWinnerCode = userHome > userAway ? p.homeTeamCode : p.awayTeamCode;
-                          if (userWinnerCode === realWinnerCode) return KO_WIN;
+                          if (p.userPredictedWinner === realWinnerCode) return KO_WIN;
                         }
                         return 0;
                       })();
