@@ -420,6 +420,11 @@ export function buildKnockoutFromGroup(
     if (home === away && r.winnerCode) {
       penaltyWinner = r.winnerCode === pick.homeTeamCode ? "home" : "away";
     }
+    // True only on the FIRST call for this pick (userPredictedWinner not yet set).
+    // For pre-deploy picks that were already overwritten by a previous applyActual
+    // run, pick.home/away now contain REAL scores, not the user's prediction —
+    // guard every capture below so those picks can't receive free draw/exact bonuses.
+    const isFirstOverwrite = pick.userPredictedWinner === undefined;
     // Capture the user's predicted winner the first time a real result overwrites
     // this pick. Once set (not undefined), we never change it so the original
     // prediction is preserved for scoring even after scores are overwritten.
@@ -427,18 +432,22 @@ export function buildKnockoutFromGroup(
       pick.userPredictedWinner !== undefined
         ? pick.userPredictedWinner
         : userPickWinner(pick);
-    // Capture whether the user predicted a draw (equal scores) before the real
-    // result overwrites home/away. Used by scoring to award round points when
-    // the real FT was also a draw even if the penalty winner was wrong/unset.
+    // Capture whether the user predicted a draw (equal scores) before overwriting.
     const userPredictedDraw =
       pick.userPredictedDraw !== undefined
         ? pick.userPredictedDraw
-        : (pick.home != null && pick.away != null && pick.home === pick.away);
+        : isFirstOverwrite
+          ? (pick.home != null && pick.away != null && pick.home === pick.away)
+          : false;
     // Capture the user's exact predicted FT score before overwriting.
     const userPredictedHome =
-      pick.userPredictedHome !== undefined ? pick.userPredictedHome : pick.home;
+      pick.userPredictedHome !== undefined ? pick.userPredictedHome
+      : isFirstOverwrite ? pick.home
+      : null;
     const userPredictedAway =
-      pick.userPredictedAway !== undefined ? pick.userPredictedAway : pick.away;
+      pick.userPredictedAway !== undefined ? pick.userPredictedAway
+      : isFirstOverwrite ? pick.away
+      : null;
     return { ...pick, home, away, penaltyWinner, userPredictedWinner, userPredictedDraw, userPredictedHome, userPredictedAway };
   };
 

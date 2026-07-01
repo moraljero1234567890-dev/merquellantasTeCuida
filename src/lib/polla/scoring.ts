@@ -246,12 +246,15 @@ export function computeLeaderboard(
           ? pick.userPredictedWinner
           : pickedWinnerCode(pick);
 
-      // Detect "user predicted a draw" — either captured by applyActual
-      // (userPredictedDraw set) or inferred from live equal scores for unplayed matches.
+      // Detect "user predicted a draw". For picks already overwritten by applyActual
+      // (userPredictedWinner set), pick.home/away are real scores — don't use them
+      // as a proxy for the user's prediction if userPredictedDraw wasn't captured yet.
       const predictedDraw =
         pick.userPredictedDraw !== undefined
           ? pick.userPredictedDraw
-          : (pick.home != null && pick.away != null && pick.home === pick.away);
+          : pick.userPredictedWinner !== undefined
+            ? false
+            : (pick.home != null && pick.away != null && pick.home === pick.away);
 
       // Award points for a correctly predicted draw: real match went to FT tie + penalties.
       if (predictedDraw && pick.homeTeamCode && pick.awayTeamCode) {

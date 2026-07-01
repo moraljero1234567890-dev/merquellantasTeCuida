@@ -68,8 +68,11 @@ function userPickedWinner(p: KnockoutPick): string | null {
 }
 
 // True if the user originally predicted a draw (equal FT scores → went to penalties).
+// For picks already overwritten by applyActual (userPredictedWinner set), p.home/away
+// are real scores — fall back to false rather than reading them as the user's prediction.
 function userPredictedDrawPick(p: KnockoutPick): boolean {
   if (p.userPredictedDraw !== undefined) return p.userPredictedDraw;
+  if (p.userPredictedWinner !== undefined) return false;
   return p.home != null && p.away != null && p.home === p.away;
 }
 
