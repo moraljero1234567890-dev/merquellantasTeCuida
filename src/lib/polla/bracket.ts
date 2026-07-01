@@ -419,6 +419,10 @@ export function buildKnockoutFromGroup(
     let penaltyWinner: KnockoutPick["penaltyWinner"] = null;
     if (home === away && r.winnerCode) {
       penaltyWinner = r.winnerCode === pick.homeTeamCode ? "home" : "away";
+    } else if (home === away && !r.winnerCode) {
+      // Real match ended in FT draw but penalty winner unknown (data missing).
+      // Preserve the user's original penalty-winner choice rather than nulling it.
+      penaltyWinner = pick.penaltyWinner;
     }
     // True only on the FIRST call for this pick (userPredictedWinner not yet set).
     // For pre-deploy picks that were already overwritten by a previous applyActual

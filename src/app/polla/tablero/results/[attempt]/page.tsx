@@ -438,6 +438,38 @@ export default function PollaResultsPage() {
       if (l) oc.losers.add(l);
       map.set(m.stage, oc);
     }
+    // For FT-draw matches where penalty scores aren't stored, infer the winner
+    // from whichever team appears in the next round's fixtures.
+    const NEXT_STAGE_SO: Partial<Record<string, string>> = {
+      ROUND_OF_32: "ROUND_OF_16", ROUND_OF_16: "QUARTER_FINALS",
+      QUARTER_FINALS: "SEMI_FINALS", SEMI_FINALS: "FINAL",
+    };
+    const teamsPerStageSO = new Map<string, Set<string>>();
+    for (const m of matches) {
+      if (m.home?.code && m.away?.code) {
+        const s = teamsPerStageSO.get(m.stage) ?? new Set<string>();
+        s.add(m.home.code); s.add(m.away.code);
+        teamsPerStageSO.set(m.stage, s);
+      }
+    }
+    for (const m of matches) {
+      if (m.stage === "GROUP_STAGE" || m.status !== "FINISHED") continue;
+      const ft = m.score?.fullTime;
+      if (!ft || ft.home !== ft.away || m.score?.penalties) continue;
+      if (!m.home?.code || !m.away?.code) continue;
+      const oc = map.get(m.stage) ?? { winners: new Set(), losers: new Set() };
+      if (oc.winners.has(m.home.code) || oc.winners.has(m.away.code)) continue;
+      const nextStage = NEXT_STAGE_SO[m.stage];
+      if (!nextStage) continue;
+      const nextTeams = teamsPerStageSO.get(nextStage) ?? new Set<string>();
+      const homeInNext = nextTeams.has(m.home.code);
+      const awayInNext = nextTeams.has(m.away.code);
+      if (homeInNext && !awayInNext) {
+        oc.winners.add(m.home.code); oc.losers.add(m.away.code); map.set(m.stage, oc);
+      } else if (awayInNext && !homeInNext) {
+        oc.winners.add(m.away.code); oc.losers.add(m.home.code); map.set(m.stage, oc);
+      }
+    }
     return map;
   }, [matches]);
 
@@ -496,6 +528,37 @@ export default function PollaResultsPage() {
       stageWinners.get(m.stage)!.add(w);
       if (m.stage === "THIRD_PLACE") realThird = w;
       if (m.stage === "FINAL") { realChampion = w; realRunnerUp = l; }
+    }
+
+    // Infer missing stageWinners for FT-draw matches (no penalty scores stored)
+    // from the next round's fixture participants.
+    const NEXT_STAGE_KP: Partial<Record<string, string>> = {
+      ROUND_OF_32: "ROUND_OF_16", ROUND_OF_16: "QUARTER_FINALS",
+      QUARTER_FINALS: "SEMI_FINALS", SEMI_FINALS: "FINAL",
+    };
+    const teamsPerStageKP = new Map<string, Set<string>>();
+    for (const m of matches) {
+      if (m.home?.code && m.away?.code) {
+        const s = teamsPerStageKP.get(m.stage) ?? new Set<string>();
+        s.add(m.home.code); s.add(m.away.code);
+        teamsPerStageKP.set(m.stage, s);
+      }
+    }
+    for (const m of matches) {
+      if (m.stage === "GROUP_STAGE" || m.status !== "FINISHED") continue;
+      const ft = m.score?.fullTime;
+      if (!ft || ft.home !== ft.away || m.score?.penalties) continue;
+      if (!m.home?.code || !m.away?.code) continue;
+      const winSet = stageWinners.get(m.stage);
+      if (winSet?.has(m.home.code) || winSet?.has(m.away.code)) continue;
+      const nextStage = NEXT_STAGE_KP[m.stage];
+      if (!nextStage) continue;
+      const nextTeams = teamsPerStageKP.get(nextStage) ?? new Set<string>();
+      const homeInNext = nextTeams.has(m.home.code);
+      const awayInNext = nextTeams.has(m.away.code);
+      if (!stageWinners.has(m.stage)) stageWinners.set(m.stage, new Set());
+      if (homeInNext && !awayInNext) stageWinners.get(m.stage)!.add(m.home.code);
+      else if (awayInNext && !homeInNext) stageWinners.get(m.stage)!.add(m.away.code);
     }
 
     // Build a set of "stage|codeA|codeB" keys for real FT-draw matches (penalties).

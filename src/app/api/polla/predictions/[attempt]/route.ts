@@ -86,6 +86,39 @@ async function recomputeKnockout(prediction: PredictionDoc, useActual: boolean):
       const key = [m.home.code, m.away.code].sort().join("|");
       actualByPair.set(key, { winnerCode, byCode: { [m.home.code]: ft.home, [m.away.code]: ft.away } });
     }
+    // For FT-draw matches where penalty scores aren't stored (winnerCode=null),
+    // infer the winner from whichever team appears in the next round's fixtures.
+    const NEXT_STAGE: Partial<Record<string, string>> = {
+      ROUND_OF_32: "ROUND_OF_16",
+      ROUND_OF_16: "QUARTER_FINALS",
+      QUARTER_FINALS: "SEMI_FINALS",
+      SEMI_FINALS: "FINAL",
+    };
+    const teamsPerStageAP = new Map<string, Set<string>>();
+    for (const m of matches) {
+      if (m.home?.code && m.away?.code) {
+        const s = teamsPerStageAP.get(m.stage) ?? new Set<string>();
+        s.add(m.home.code); s.add(m.away.code);
+        teamsPerStageAP.set(m.stage, s);
+      }
+    }
+    for (const [key, entry] of actualByPair) {
+      if (entry.winnerCode !== null) continue; // already resolved
+      const codes = Object.keys(entry.byCode);
+      if (codes.length !== 2) continue;
+      const [codeA, codeB] = codes;
+      // Find which stage this pair belongs to
+      const pairMatch = matches.find(
+        (m) => m.status === "FINISHED" && m.home?.code && m.away?.code &&
+          [m.home.code, m.away.code].sort().join("|") === key,
+      );
+      if (!pairMatch) continue;
+      const nextStage = NEXT_STAGE[pairMatch.stage];
+      if (!nextStage) continue;
+      const nextTeams = teamsPerStageAP.get(nextStage) ?? new Set<string>();
+      if (nextTeams.has(codeA) && !nextTeams.has(codeB)) entry.winnerCode = codeA;
+      else if (nextTeams.has(codeB) && !nextTeams.has(codeA)) entry.winnerCode = codeB;
+    }
 
     const knockout = buildKnockoutFromGroup(standings, prediction.knockout, r32Override, actualByPair);
     // Use userPickedChampionFromFinal so prediction.champion always reflects

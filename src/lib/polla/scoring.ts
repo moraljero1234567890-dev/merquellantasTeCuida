@@ -149,6 +149,42 @@ function knockoutWinnersByStage(matches: MatchDoc[]): {
     }
   }
 
+  // For FT-draw matches where penalty scores aren't stored, infer the winner
+  // from whichever of the two teams appears in the next round's fixtures.
+  // This avoids giving 0 pts to users who correctly predicted the advancing team.
+  const NEXT_STAGE: Partial<Record<string, string>> = {
+    ROUND_OF_32: "ROUND_OF_16",
+    ROUND_OF_16: "QUARTER_FINALS",
+    QUARTER_FINALS: "SEMI_FINALS",
+    SEMI_FINALS: "FINAL",
+  };
+  const winnerSetFor: Partial<Record<string, Set<string>>> = {
+    ROUND_OF_32: r32, ROUND_OF_16: r16, QUARTER_FINALS: qf, SEMI_FINALS: sf,
+  };
+  const teamsPerStage = new Map<string, Set<string>>();
+  for (const m of matches) {
+    if (m.home?.code && m.away?.code) {
+      const s = teamsPerStage.get(m.stage) ?? new Set<string>();
+      s.add(m.home.code); s.add(m.away.code);
+      teamsPerStage.set(m.stage, s);
+    }
+  }
+  for (const m of matches) {
+    if (m.stage === "GROUP_STAGE" || m.status !== "FINISHED") continue;
+    const ft = m.score?.fullTime;
+    if (!ft || ft.home !== ft.away || m.score?.penalties) continue;
+    if (!m.home?.code || !m.away?.code) continue;
+    const winSet = winnerSetFor[m.stage];
+    if (!winSet || winSet.has(m.home.code) || winSet.has(m.away.code)) continue;
+    const nextStage = NEXT_STAGE[m.stage];
+    if (!nextStage) continue;
+    const nextTeams = teamsPerStage.get(nextStage) ?? new Set<string>();
+    const homeInNext = nextTeams.has(m.home.code);
+    const awayInNext = nextTeams.has(m.away.code);
+    if (homeInNext && !awayInNext) winSet.add(m.home.code);
+    else if (awayInNext && !homeInNext) winSet.add(m.away.code);
+  }
+
   return { r32, r16, qf, sf, third, champion, runnerUp, penaltyDrawKeys };
 }
 
