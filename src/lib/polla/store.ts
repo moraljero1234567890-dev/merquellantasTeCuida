@@ -342,10 +342,12 @@ export async function getLockStatus(): Promise<LockStatus> {
     return { groupLocked: true, knockoutOpen: false, editableStages: [], allGroupFinished: false, useActualStandings: false };
   }
 
-  // Knockout editing deadline: Sun Jun 29 2026 19:00 UTC (2:00 PM Colombia, UTC-5).
+  // Knockout editing deadline: Sun Jul 20 2026 23:59 UTC (day after the Final).
+  // Per-match locking (getKnockoutLockInfo) handles individual game deadlines;
+  // this is just the global kill-switch once the entire tournament is over.
   // Past this date all editing is closed; useActualStandings stays true so the
   // results page can still rebuild brackets and show real scores.
-  const KNOCKOUT_DEADLINE = new Date("2026-06-29T19:00:00Z");
+  const KNOCKOUT_DEADLINE = new Date("2026-07-20T23:59:00Z");
   if (now >= KNOCKOUT_DEADLINE) {
     return {
       groupLocked: true,

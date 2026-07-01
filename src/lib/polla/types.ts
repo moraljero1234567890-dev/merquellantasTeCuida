@@ -68,6 +68,12 @@ export type KnockoutPick = {
   // Captured the first time a real result overwrites this pick. Once set, never
   // changed — preserves the user's original prediction for scoring/display.
   userPredictedWinner?: string | null;
+  // True if the user originally predicted equal home/away scores (a draw).
+  userPredictedDraw?: boolean;
+  // User's originally predicted FT score (captured before applyActual overwrites
+  // home/away with the real result). Used for exact-score / goal-diff bonuses.
+  userPredictedHome?: number | null;
+  userPredictedAway?: number | null;
 };
 
 export type PredictionDoc = {

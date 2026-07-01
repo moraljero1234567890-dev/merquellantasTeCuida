@@ -9,7 +9,7 @@ const MERQUE_LOGO =
 
 type ScoreBreakdown = {
   group: { outcomes: number; exact: number; goalDiff: number; points: number };
-  knockout: { r32: number; r16: number; qf: number; sf: number; third: number; runnerUp: number; champion: number; points: number };
+  knockout: { r32: number; r16: number; qf: number; sf: number; third: number; runnerUp: number; champion: number; exact?: number; goalDiff?: number; points: number };
   bonus?: number;
   total: number;
 };

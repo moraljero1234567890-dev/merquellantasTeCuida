@@ -11,6 +11,10 @@ export const POINTS = {
   KO_QF: 75,
   KO_SF: 100,
   KO_THIRD: 50,
+  // Exact FT score / same goal-diff bonuses for knockout picks (stack on top of
+  // round-winner pts, same philosophy as group stage exact/diff tiers).
+  KO_EXACT: 30,
+  KO_GOAL_DIFF: 10,
   CHAMPION: 300,
   RUNNER_UP: 250,
   CHAMPION_AND_RUNNER_UP: 350,
@@ -31,6 +35,9 @@ export type ScoreBreakdown = {
     third: number;
     runnerUp: number;
     champion: number;
+    // Count of knockout picks with an exact FT score or matching goal difference.
+    exact: number;
+    goalDiff: number;
     points: number;
   };
   bonus: number;
@@ -81,6 +88,10 @@ function knockoutWinnersByStage(matches: MatchDoc[]): {
   third: string | null;
   champion: string | null;
   runnerUp: string | null;
+  // "STAGE|codeA|codeB" (team codes sorted) for finished matches that ended
+  // in a FT draw and went to a penalty shootout. Used to award round points
+  // when the user correctly predicted a draw, even with wrong penalty winner.
+  penaltyDrawKeys: Set<string>;
 } {
   const r32 = new Set<string>();
   const r16 = new Set<string>();
@@ -89,12 +100,19 @@ function knockoutWinnersByStage(matches: MatchDoc[]): {
   let third: string | null = null;
   let champion: string | null = null;
   let runnerUp: string | null = null;
+  const penaltyDrawKeys = new Set<string>();
 
   for (const m of matches) {
     if (m.status !== "FINISHED") continue;
     const ft = m.score?.fullTime;
     const pens = m.score?.penalties;
     if (!ft) continue;
+
+    // Track matches that ended as FT draws (went to penalties).
+    if (ft.home === ft.away && pens && m.home?.code && m.away?.code) {
+      penaltyDrawKeys.add(`${m.stage}|${[m.home.code, m.away.code].sort().join("|")}`);
+    }
+
     let winnerCode: string | null = null;
     if (ft.home > ft.away) winnerCode = m.home.code;
     else if (ft.away > ft.home) winnerCode = m.away.code;
@@ -130,7 +148,7 @@ function knockoutWinnersByStage(matches: MatchDoc[]): {
     }
   }
 
-  return { r32, r16, qf, sf, third, champion, runnerUp };
+  return { r32, r16, qf, sf, third, champion, runnerUp, penaltyDrawKeys };
 }
 
 function pickedWinnerCode(p: KnockoutPick): string | null {
@@ -145,7 +163,7 @@ function pickedWinnerCode(p: KnockoutPick): string | null {
 function emptyBreakdown(): ScoreBreakdown {
   return {
     group: { outcomes: 0, exact: 0, goalDiff: 0, points: 0 },
-    knockout: { r32: 0, r16: 0, qf: 0, sf: 0, third: 0, runnerUp: 0, champion: 0, points: 0 },
+    knockout: { r32: 0, r16: 0, qf: 0, sf: 0, third: 0, runnerUp: 0, champion: 0, exact: 0, goalDiff: 0, points: 0 },
     bonus: 0,
     total: 0,
   };
@@ -161,6 +179,16 @@ export function computeLeaderboard(
   for (const m of groupReal) realResultById.set(m.id, { home: m.home, away: m.away });
 
   const knockReal = knockoutWinnersByStage(matches);
+
+  // Map "STAGE|codeA|codeB" (sorted) → real FT score + which team was home, for
+  // awarding exact-score and goal-difference bonuses on knockout picks.
+  const realFTMap = new Map<string, { homeCode: string; ft: { home: number; away: number } }>();
+  for (const m of matches) {
+    if (m.stage === "GROUP_STAGE" || m.status !== "FINISHED") continue;
+    const ft = m.score?.fullTime;
+    if (!ft || !m.home?.code || !m.away?.code) continue;
+    realFTMap.set(`${m.stage}|${[m.home.code, m.away.code].sort().join("|")}`, { homeCode: m.home.code, ft });
+  }
 
   const userByEmail = new Map(users.map((u) => [u.email, u]));
   const totalAttemptsByEmail = new Map<string, number>();
@@ -198,6 +226,11 @@ export function computeLeaderboard(
     // predicted to advance from that round. userPredictedWinner is captured before
     // applyActual overwrites the pick scores, so it always reflects the user's
     // original prediction even for already-finished matches.
+    //
+    // Tie rule: if the user predicted a draw (userPredictedDraw=true, or equal
+    // live scores for unplayed matches) AND the real match also ended as a FT
+    // draw going to penalties, award round points regardless of whether the
+    // penalty winner was predicted correctly. "Getting the score right" counts.
     const allKnockoutPicks = [
       ...p.knockout.r32,
       ...p.knockout.r16,
@@ -212,6 +245,31 @@ export function computeLeaderboard(
         pick.userPredictedWinner !== undefined
           ? pick.userPredictedWinner
           : pickedWinnerCode(pick);
+
+      // Detect "user predicted a draw" — either captured by applyActual
+      // (userPredictedDraw set) or inferred from live equal scores for unplayed matches.
+      const predictedDraw =
+        pick.userPredictedDraw !== undefined
+          ? pick.userPredictedDraw
+          : (pick.home != null && pick.away != null && pick.home === pick.away);
+
+      // Award points for a correctly predicted draw: real match went to FT tie + penalties.
+      if (predictedDraw && pick.homeTeamCode && pick.awayTeamCode) {
+        const drawKey = `${pick.stage}|${[pick.homeTeamCode, pick.awayTeamCode].sort().join("|")}`;
+        if (knockReal.penaltyDrawKeys.has(drawKey)) {
+          switch (pick.stage) {
+            case "ROUND_OF_32": br.knockout.r32 += 1; br.knockout.points += POINTS.KO_R32; break;
+            case "ROUND_OF_16": br.knockout.r16 += 1; br.knockout.points += POINTS.KO_R16; break;
+            case "QUARTER_FINALS": br.knockout.qf += 1; br.knockout.points += POINTS.KO_QF; break;
+            case "SEMI_FINALS": br.knockout.sf += 1; br.knockout.points += POINTS.KO_SF; break;
+            case "THIRD_PLACE":
+              if (knockReal.third) { br.knockout.third += 1; br.knockout.points += POINTS.KO_THIRD; }
+              break;
+          }
+          continue; // already awarded — skip the regular winner check below
+        }
+      }
+
       if (!upw) continue;
       switch (pick.stage) {
         case "ROUND_OF_32":
@@ -263,6 +321,39 @@ export function computeLeaderboard(
     } else if (gotRunnerUp) {
       br.knockout.runnerUp = 1;
       br.knockout.points += POINTS.RUNNER_UP;
+    }
+
+    // Exact FT score / goal-difference bonus for every knockout pick (r32..final).
+    // Awards extra pts when the user correctly predicted the exact FT score or
+    // the correct FT goal difference for a finished match, stacking on top of
+    // round-winner pts — same philosophy as the group stage exact/diff tiers.
+    const allKOPicksForBonus = [
+      ...p.knockout.r32,
+      ...p.knockout.r16,
+      ...p.knockout.qf,
+      ...p.knockout.sf,
+      ...(p.knockout.third ? [p.knockout.third] : []),
+      ...(p.knockout.final ? [p.knockout.final] : []),
+    ];
+    for (const pick of allKOPicksForBonus) {
+      if (!pick.homeTeamCode || !pick.awayTeamCode) continue;
+      const key = `${pick.stage}|${[pick.homeTeamCode, pick.awayTeamCode].sort().join("|")}`;
+      const entry = realFTMap.get(key);
+      if (!entry) continue;
+      // Normalize real FT to the pick's home/away orientation.
+      const realHome = entry.homeCode === pick.homeTeamCode ? entry.ft.home : entry.ft.away;
+      const realAway = entry.homeCode === pick.homeTeamCode ? entry.ft.away : entry.ft.home;
+      // User's original predicted FT score (captured before applyActual overwrote it).
+      const userHome = pick.userPredictedHome !== undefined ? pick.userPredictedHome : pick.home;
+      const userAway = pick.userPredictedAway !== undefined ? pick.userPredictedAway : pick.away;
+      if (userHome == null || userAway == null) continue;
+      if (userHome === realHome && userAway === realAway) {
+        br.knockout.exact += 1;
+        br.knockout.points += POINTS.KO_EXACT;
+      } else if ((userHome - userAway) === (realHome - realAway)) {
+        br.knockout.goalDiff += 1;
+        br.knockout.points += POINTS.KO_GOAL_DIFF;
+      }
     }
 
     br.total = br.group.points + br.knockout.points;
