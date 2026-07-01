@@ -617,7 +617,7 @@ export default function PollaAdminPage() {
                 </tbody>
               </table>
               <p className="mt-3 font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--foreground-muted)]">
-                Grupos (acumulan): ex = exacto (100), dif = diferencia de gol (50), res = solo resultado (30) · Camp = campeón (300), Sub = subcampeón (250), ambos = 350
+                Grupos (acumulan): ex = exacto (100), dif = diferencia de gol (50), res = solo resultado (30) · Elim: exacto FT = 100, avance = 50, error = 0 · Camp = campeón (300), Sub = subcampeón (250), ambos = 350
               </p>
             </div>
           )}

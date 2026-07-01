@@ -91,27 +91,18 @@ function userPredictedScore(p: KnockoutPick): { home: number; away: number } | n
   return { home: h, away: a };
 }
 
-const KO_PTS: Record<string, number> = {
-  ROUND_OF_32: 25,
-  ROUND_OF_16: 50,
-  QUARTER_FINALS: 75,
-  SEMI_FINALS: 100,
-  THIRD_PLACE: 50,
-  CHAMPION: 300,
-  RUNNER_UP: 250,
-  CHAMPION_AND_RUNNER_UP: 350,
-};
+const KO_EXACT_WIN = 100;
+const KO_WIN = 50;
+const KO_CHAMPION = 300;
+const KO_RUNNER_UP = 250;
+const KO_CHAMPION_AND_RUNNER_UP = 350;
 
-const KO_EXACT_BONUS = 30;
-const KO_GOAL_DIFF_BONUS = 10;
-
-// Compute whether the user's predicted FT score exactly matches the real FT
-// score, or at least has the same goal difference. Returns null when the real
-// match isn't finished yet. `matches` is the full matches list.
+// Returns "exact" when the user's predicted FT score matches the real FT score
+// (for draws: exact tie score, penalty winner irrelevant), null otherwise.
 function koScoreTierForPick(
   pick: KnockoutPick,
   realMatches: MatchWithScore[],
-): "exact" | "goalDiff" | null {
+): "exact" | null {
   if (!pick.homeTeamCode || !pick.awayTeamCode) return null;
   const real = realMatches.find(
     (m) =>
@@ -122,22 +113,18 @@ function koScoreTierForPick(
   );
   if (!real?.score?.fullTime) return null;
   const ft = real.score.fullTime;
-  // Normalize real FT to pick's home/away team orientation.
   const realHome = real.home.code === pick.homeTeamCode ? ft.home : ft.away;
   const realAway = real.home.code === pick.homeTeamCode ? ft.away : ft.home;
-  // Use strict null check (not != null) so pre-deploy picks where userPredictedHome
-  // was set to null by the isFirstOverwrite guard don't fall back to pick.home (real
-  // score) and accidentally earn a free exact bonus.
+  // Use strict null check so pre-deploy picks (userPredictedHome explicitly null)
+  // don't fall back to pick.home (real score) and earn a free exact bonus.
   const userHome = (pick.userPredictedHome != null) ? pick.userPredictedHome
     : (pick.userPredictedHome === undefined) ? pick.home
-    : null; // explicitly null → pre-deploy pick, no original score available
+    : null;
   const userAway = (pick.userPredictedAway != null) ? pick.userPredictedAway
     : (pick.userPredictedAway === undefined) ? pick.away
     : null;
   if (userHome == null || userAway == null) return null;
-  if (userHome === realHome && userAway === realAway) return "exact";
-  if (userHome - userAway === realHome - realAway) return "goalDiff";
-  return null;
+  return (userHome === realHome && userAway === realAway) ? "exact" : null;
 }
 
 function MiniMatch({
@@ -191,7 +178,7 @@ function MiniMatch({
 // One of the user's predicted knockout matches.
 // `advanced`: true = the team they backed won its real match, false = lost, null = not played yet.
 // `pts`: total points earned for this pick (null = result not yet known).
-// `scoreTier`: "exact" | "goalDiff" | null — whether the user's predicted FT matched exactly or same diff.
+// `scoreTier`: "exact" when the user's predicted FT matched exactly (100 pts).
 function PredictedMatchCard({
   pick,
   advanced,
@@ -201,7 +188,7 @@ function PredictedMatchCard({
   pick: KnockoutPick;
   advanced: boolean | null;
   pts: number | null;
-  scoreTier?: "exact" | "goalDiff" | null;
+  scoreTier?: "exact" | null;
 }) {
   const h = displayTeam(pick.homeTeamCode, pick.homeTeamName);
   const a = displayTeam(pick.awayTeamCode, pick.awayTeamName);
@@ -244,11 +231,6 @@ function PredictedMatchCard({
           {scoreTier === "exact" && (
             <span className="rounded-sm bg-emerald-600 px-1.5 py-0.5 font-mono text-[9px] font-black uppercase tracking-[0.15em] text-white">
               Exacto
-            </span>
-          )}
-          {scoreTier === "goalDiff" && (
-            <span className="rounded-sm bg-amber-500 px-1.5 py-0.5 font-mono text-[9px] font-black uppercase tracking-[0.15em] text-white">
-              Dif. gol
             </span>
           )}
           {pts !== null && (
@@ -511,69 +493,22 @@ export default function PollaResultsPage() {
     return null;
   };
 
-  // Per-round knockout points: for each pick, check if the user's originally
-  // predicted winner (userPredictedWinner, captured before applyActual overwrote
-  // the pick) actually won their round in the real tournament.
+  // Flat knockout scoring: 100 pts for exact FT score, 50 pts for correct winner
+  // or correctly predicted draw, 0 otherwise. Applies to all rounds r32..final.
   const knockoutPts = useMemo(() => {
-    const result = { r32: 0, r16: 0, qf: 0, sf: 0, third: 0, champion: 0, runnerUp: 0, exact: 0, goalDiff: 0, total: 0 };
+    const result = { exact: 0, winner: 0, champion: 0, runnerUp: 0, total: 0 };
     if (!prediction) return result;
 
-    const stageWinners = new Map<string, Set<string>>();
-    let realThird: string | null = null;
-    let realChampion: string | null = null;
-    let realRunnerUp: string | null = null;
-
-    for (const m of matches) {
-      if (m.stage === "GROUP_STAGE" || m.status !== "FINISHED" || !m.score?.fullTime) continue;
-      const w = actualWinnerCode(m);
-      if (!w) continue;
-      const l = w === m.home.code ? m.away.code : m.home.code;
-      if (!stageWinners.has(m.stage)) stageWinners.set(m.stage, new Set());
-      stageWinners.get(m.stage)!.add(w);
-      if (m.stage === "THIRD_PLACE") realThird = w;
-      if (m.stage === "FINAL") { realChampion = w; realRunnerUp = l; }
-    }
-
-    // Infer missing stageWinners for FT-draw matches (no penalty scores stored)
-    // from the next round's fixture participants.
-    const NEXT_STAGE_KP: Partial<Record<string, string>> = {
-      ROUND_OF_32: "ROUND_OF_16", ROUND_OF_16: "QUARTER_FINALS",
-      QUARTER_FINALS: "SEMI_FINALS", SEMI_FINALS: "FINAL",
-    };
-    const teamsPerStageKP = new Map<string, Set<string>>();
-    for (const m of matches) {
-      if (m.home?.code && m.away?.code) {
-        const s = teamsPerStageKP.get(m.stage) ?? new Set<string>();
-        s.add(m.home.code); s.add(m.away.code);
-        teamsPerStageKP.set(m.stage, s);
-      }
-    }
+    // Build a map of real FT scores keyed by "stage|sortedTeamCodes".
+    const realFTMap = new Map<string, { homeCode: string; ft: { home: number; away: number } }>();
     for (const m of matches) {
       if (m.stage === "GROUP_STAGE" || m.status !== "FINISHED") continue;
       const ft = m.score?.fullTime;
-      if (!ft || ft.home !== ft.away || m.score?.penalties) continue;
-      if (!m.home?.code || !m.away?.code) continue;
-      const winSet = stageWinners.get(m.stage);
-      if (winSet?.has(m.home.code) || winSet?.has(m.away.code)) continue;
-      const nextStage = NEXT_STAGE_KP[m.stage];
-      if (!nextStage) continue;
-      const nextTeams = teamsPerStageKP.get(nextStage) ?? new Set<string>();
-      const homeInNext = nextTeams.has(m.home.code);
-      const awayInNext = nextTeams.has(m.away.code);
-      if (!stageWinners.has(m.stage)) stageWinners.set(m.stage, new Set());
-      if (homeInNext && !awayInNext) stageWinners.get(m.stage)!.add(m.home.code);
-      else if (awayInNext && !homeInNext) stageWinners.get(m.stage)!.add(m.away.code);
-    }
-
-    // Build a set of "stage|codeA|codeB" keys for real FT-draw matches (penalties).
-    const penaltyDrawKeys = new Set<string>();
-    for (const m of matches) {
-      if (m.stage === "GROUP_STAGE" || m.status !== "FINISHED") continue;
-      const ft = m.score?.fullTime;
-      // Any knockout FT draw always means a penalty shootout — don't require pens data.
-      if (ft && ft.home === ft.away && m.home?.code && m.away?.code) {
-        penaltyDrawKeys.add(`${m.stage}|${[m.home.code, m.away.code].sort().join("|")}`);
-      }
+      if (!ft || !m.home?.code || !m.away?.code) continue;
+      realFTMap.set(
+        `${m.stage}|${[m.home.code, m.away.code].sort().join("|")}`,
+        { homeCode: m.home.code, ft },
+      );
     }
 
     const allPicks = [
@@ -582,45 +517,49 @@ export default function PollaResultsPage() {
       ...prediction.knockout.qf,
       ...prediction.knockout.sf,
       ...(prediction.knockout.third ? [prediction.knockout.third] : []),
+      ...(prediction.knockout.final ? [prediction.knockout.final] : []),
     ];
     for (const pick of allPicks) {
-      // Tie rule: user predicted a draw AND the real match was also a FT draw.
-      if (userPredictedDrawPick(pick) && pick.homeTeamCode && pick.awayTeamCode) {
-        const drawKey = `${pick.stage}|${[pick.homeTeamCode, pick.awayTeamCode].sort().join("|")}`;
-        if (penaltyDrawKeys.has(drawKey)) {
-          switch (pick.stage) {
-            case "ROUND_OF_32": result.r32 += 1; result.total += KO_PTS.ROUND_OF_32; break;
-            case "ROUND_OF_16": result.r16 += 1; result.total += KO_PTS.ROUND_OF_16; break;
-            case "QUARTER_FINALS": result.qf += 1; result.total += KO_PTS.QUARTER_FINALS; break;
-            case "SEMI_FINALS": result.sf += 1; result.total += KO_PTS.SEMI_FINALS; break;
-            case "THIRD_PLACE": if (realThird) { result.third += 1; result.total += KO_PTS.THIRD_PLACE; } break;
-          }
-          continue; // already awarded — skip the regular winner check below
-        }
+      if (!pick.homeTeamCode || !pick.awayTeamCode) continue;
+      const key = `${pick.stage}|${[pick.homeTeamCode, pick.awayTeamCode].sort().join("|")}`;
+      const entry = realFTMap.get(key);
+      if (!entry) continue;
+
+      const realHome = entry.homeCode === pick.homeTeamCode ? entry.ft.home : entry.ft.away;
+      const realAway = entry.homeCode === pick.homeTeamCode ? entry.ft.away : entry.ft.home;
+      const pred = userPredictedScore(pick);
+      if (!pred) continue;
+
+      if (pred.home === realHome && pred.away === realAway) {
+        result.exact += 1;
+        result.total += KO_EXACT_WIN;
+        continue;
       }
 
-      const upw = userPickedWinner(pick);
-      if (!upw) continue;
-      switch (pick.stage) {
-        case "ROUND_OF_32":
-          if (stageWinners.get("ROUND_OF_32")?.has(upw)) { result.r32 += 1; result.total += KO_PTS.ROUND_OF_32; }
-          break;
-        case "ROUND_OF_16":
-          if (stageWinners.get("ROUND_OF_16")?.has(upw)) { result.r16 += 1; result.total += KO_PTS.ROUND_OF_16; }
-          break;
-        case "QUARTER_FINALS":
-          if (stageWinners.get("QUARTER_FINALS")?.has(upw)) { result.qf += 1; result.total += KO_PTS.QUARTER_FINALS; }
-          break;
-        case "SEMI_FINALS":
-          if (stageWinners.get("SEMI_FINALS")?.has(upw)) { result.sf += 1; result.total += KO_PTS.SEMI_FINALS; }
-          break;
-        case "THIRD_PLACE":
-          if (realThird && upw === realThird) { result.third += 1; result.total += KO_PTS.THIRD_PLACE; }
-          break;
+      const realIsDraw = realHome === realAway;
+      if (realIsDraw && userPredictedDrawPick(pick)) {
+        result.winner += 1;
+        result.total += KO_WIN;
+      } else if (!realIsDraw) {
+        const realWinnerCode = realHome > realAway ? pick.homeTeamCode : pick.awayTeamCode;
+        if (userPickedWinner(pick) === realWinnerCode) {
+          result.winner += 1;
+          result.total += KO_WIN;
+        }
       }
     }
 
     // Champion / runner-up from the final pick
+    let realChampion: string | null = null;
+    let realRunnerUp: string | null = null;
+    for (const m of matches) {
+      if (m.stage !== "FINAL" || m.status !== "FINISHED" || !m.score?.fullTime) continue;
+      const w = actualWinnerCode(m);
+      if (!w) continue;
+      realChampion = w;
+      realRunnerUp = w === m.home.code ? m.away.code : m.home.code;
+    }
+
     const finalPick = prediction.knockout.final;
     const myChampion = finalPick ? userPickedWinner(finalPick) : null;
     const myRunnerUp = myChampion && finalPick
@@ -631,26 +570,11 @@ export default function PollaResultsPage() {
     const gotChampion = !!realChampion && myChampion === realChampion;
     const gotRunnerUp = !!realRunnerUp && !!myRunnerUp && myRunnerUp === realRunnerUp;
     if (gotChampion && gotRunnerUp) {
-      result.champion = 1; result.runnerUp = 1; result.total += KO_PTS.CHAMPION_AND_RUNNER_UP;
+      result.champion = 1; result.runnerUp = 1; result.total += KO_CHAMPION_AND_RUNNER_UP;
     } else if (gotChampion) {
-      result.champion = 1; result.total += KO_PTS.CHAMPION;
+      result.champion = 1; result.total += KO_CHAMPION;
     } else if (gotRunnerUp) {
-      result.runnerUp = 1; result.total += KO_PTS.RUNNER_UP;
-    }
-
-    // Exact FT score / goal-difference bonus for every knockout pick (r32..final).
-    const allPicksForBonus = [
-      ...prediction.knockout.r32,
-      ...prediction.knockout.r16,
-      ...prediction.knockout.qf,
-      ...prediction.knockout.sf,
-      ...(prediction.knockout.third ? [prediction.knockout.third] : []),
-      ...(prediction.knockout.final ? [prediction.knockout.final] : []),
-    ];
-    for (const pick of allPicksForBonus) {
-      const tier = koScoreTierForPick(pick, matches);
-      if (tier === "exact") { result.exact += 1; result.total += KO_EXACT_BONUS; }
-      else if (tier === "goalDiff") { result.goalDiff += 1; result.total += KO_GOAL_DIFF_BONUS; }
+      result.runnerUp = 1; result.total += KO_RUNNER_UP;
     }
 
     return result;
@@ -884,21 +808,16 @@ export default function PollaResultsPage() {
                 </span>
               </h2>
               <div className="mt-3 flex flex-wrap gap-x-5 gap-y-1 text-[11px] text-[var(--foreground-soft)]">
-                {knockoutPts.r32 > 0 && <span>32avos: <strong>{knockoutPts.r32}×25</strong></span>}
-                {knockoutPts.r16 > 0 && <span>Octavos: <strong>{knockoutPts.r16}×50</strong></span>}
-                {knockoutPts.qf > 0 && <span>Cuartos: <strong>{knockoutPts.qf}×75</strong></span>}
-                {knockoutPts.sf > 0 && <span>Semis: <strong>{knockoutPts.sf}×100</strong></span>}
-                {knockoutPts.third > 0 && <span>3er puesto: <strong>+50</strong></span>}
+                {knockoutPts.exact > 0 && <span className="text-emerald-700">Marcador exacto: <strong>{knockoutPts.exact}×100</strong></span>}
+                {knockoutPts.winner > 0 && <span>Quién avanza: <strong>{knockoutPts.winner}×50</strong></span>}
                 {knockoutPts.champion > 0 && <span>Campeón: <strong>+{knockoutPts.runnerUp ? "350 (ambos)" : "300"}</strong></span>}
                 {knockoutPts.runnerUp > 0 && !knockoutPts.champion && <span>Subcampeón: <strong>+250</strong></span>}
-                {knockoutPts.exact > 0 && <span className="text-emerald-700">Marcador exacto: <strong>{knockoutPts.exact}×+30</strong></span>}
-                {knockoutPts.goalDiff > 0 && <span className="text-amber-600">Dif. de gol: <strong>{knockoutPts.goalDiff}×+10</strong></span>}
               </div>
               <p className="mt-2 text-sm text-[var(--foreground-muted)]">
-                Puntos por acertar quién avanza en cada ronda:{" "}
-                32avos 25 pts · Octavos 50 pts · Cuartos 75 pts · Semis 100 pts.
-                Campeón 300 · Subcampeón 250 (350 si aciertas ambos).
-                Bonus: marcador exacto <strong>+30 pts</strong>, diferencia de gol <strong>+10 pts</strong>.{" "}
+                Marcador exacto (FT) <strong>100 pts</strong> · Solo quién avanza <strong>50 pts</strong> · Error 0 pts.
+                Para empates: si aciertas el marcador exacto del tiempo reglamentario ganas 100 pts;
+                si solo predijiste empate (cualquier marcador) ganas 50 pts — el resultado de penales no importa.
+                Campeón 300 · Subcampeón 250 (350 si aciertas ambos).{" "}
                 <span className="text-emerald-700">Verde</span> = acertaste quién avanza.
               </p>
               <div className="mt-6 grid gap-8">
@@ -921,32 +840,35 @@ export default function PollaResultsPage() {
                     realByTeamPair.set(key, m);
                   }
 
-                  // Compute per-pick points: round-winner pts + exact/goaldiff bonus.
+                  // Per-pick points: 100 for exact FT score, 50 for correct winner/draw, 0 otherwise.
                   const stageOc = stageOutcome.get(stage);
                   const ptsForPick = (pick: KnockoutPick): number | null => {
-                    if (!stageOc) return null;
-                    let roundPts: number | null = null;
-                    // Check tie-draw rule first.
-                    if (userPredictedDrawPick(pick) && pick.homeTeamCode && pick.awayTeamCode) {
-                      const drawKey = `${stage}|${[pick.homeTeamCode, pick.awayTeamCode].sort().join("|")}`;
-                      const drawKeys = new Set(
-                        matches
-                          .filter((m) => m.stage === stage && m.status === "FINISHED" &&
-                            m.score?.fullTime?.home === m.score?.fullTime?.away &&
-                            m.score?.penalties && m.home?.code && m.away?.code)
-                          .map((m) => `${m.stage}|${[m.home.code, m.away.code].sort().join("|")}`)
-                      );
-                      if (drawKeys.has(drawKey)) roundPts = KO_PTS[stage] ?? 0;
-                    }
-                    if (roundPts === null) {
+                    if (!pick.homeTeamCode || !pick.awayTeamCode) return null;
+                    const real = matches.find(
+                      (m) => m.stage === stage && m.status === "FINISHED" &&
+                        ((m.home.code === pick.homeTeamCode && m.away.code === pick.awayTeamCode) ||
+                         (m.home.code === pick.awayTeamCode && m.away.code === pick.homeTeamCode)),
+                    );
+                    if (!real?.score?.fullTime) {
+                      // Match not finished yet — show null only if we have no outcome info.
+                      if (!stageOc) return null;
                       const w = userPickedWinner(pick);
-                      if (!w) return null;
-                      if (!stageOc.winners.has(w) && !stageOc.losers.has(w)) return null;
-                      roundPts = stageOc.winners.has(w) ? (KO_PTS[stage] ?? 0) : 0;
+                      if (!w || (!stageOc.winners.has(w) && !stageOc.losers.has(w))) return null;
+                      return stageOc.winners.has(w) ? KO_WIN : 0;
                     }
-                    const tier = koScoreTierForPick(pick, matches);
-                    const bonus = tier === "exact" ? KO_EXACT_BONUS : tier === "goalDiff" ? KO_GOAL_DIFF_BONUS : 0;
-                    return roundPts + bonus;
+                    const ft = real.score.fullTime;
+                    const realHome = real.home.code === pick.homeTeamCode ? ft.home : ft.away;
+                    const realAway = real.home.code === pick.homeTeamCode ? ft.away : ft.home;
+                    const pred = userPredictedScore(pick);
+                    if (!pred) return null;
+                    if (pred.home === realHome && pred.away === realAway) return KO_EXACT_WIN;
+                    const realIsDraw = realHome === realAway;
+                    if (realIsDraw && userPredictedDrawPick(pick)) return KO_WIN;
+                    if (!realIsDraw) {
+                      const realWinnerCode = realHome > realAway ? pick.homeTeamCode : pick.awayTeamCode;
+                      if (userPickedWinner(pick) === realWinnerCode) return KO_WIN;
+                    }
+                    return 0;
                   };
 
                   // Real matches unmatched by any user pick (shown after paired rows).
@@ -1028,30 +950,28 @@ export default function PollaResultsPage() {
                       const stage = key === "third" ? "THIRD_PLACE" : "FINAL";
                       const real = realByStage.get(stage) ?? [];
                       // Points for third-place pick only; final pts shown in champion/runner-up block below.
-                      const stageOc = stageOutcome.get(stage);
                       const scoreTier = koScoreTierForPick(p, matches);
                       const pts: number | null = key === "final" ? null : (() => {
-                        if (!stageOc) return null;
-                        let roundPts: number | null = null;
-                        // Tie rule for third-place: predicted draw + real FT draw = correct.
-                        if (userPredictedDrawPick(p) && p.homeTeamCode && p.awayTeamCode) {
-                          const drawKey = `${stage}|${[p.homeTeamCode, p.awayTeamCode].sort().join("|")}`;
-                          const isRealDraw = matches.some(
-                            (m) => m.stage === stage && m.status === "FINISHED" &&
-                              m.score?.fullTime?.home === m.score?.fullTime?.away &&
-                              m.score?.penalties && m.home?.code && m.away?.code &&
-                              `${m.stage}|${[m.home.code, m.away.code].sort().join("|")}` === drawKey
-                          );
-                          if (isRealDraw) roundPts = KO_PTS[stage] ?? 0;
+                        if (!p.homeTeamCode || !p.awayTeamCode) return null;
+                        const real = matches.find(
+                          (m) => m.stage === stage && m.status === "FINISHED" &&
+                            ((m.home.code === p.homeTeamCode && m.away.code === p.awayTeamCode) ||
+                             (m.home.code === p.awayTeamCode && m.away.code === p.homeTeamCode)),
+                        );
+                        if (!real?.score?.fullTime) return null;
+                        const ft = real.score.fullTime;
+                        const realHome = real.home.code === p.homeTeamCode ? ft.home : ft.away;
+                        const realAway = real.home.code === p.homeTeamCode ? ft.away : ft.home;
+                        const pred = userPredictedScore(p);
+                        if (!pred) return null;
+                        if (pred.home === realHome && pred.away === realAway) return KO_EXACT_WIN;
+                        const realIsDraw = realHome === realAway;
+                        if (realIsDraw && userPredictedDrawPick(p)) return KO_WIN;
+                        if (!realIsDraw) {
+                          const realWinnerCode = realHome > realAway ? p.homeTeamCode : p.awayTeamCode;
+                          if (userPickedWinner(p) === realWinnerCode) return KO_WIN;
                         }
-                        if (roundPts === null) {
-                          const w = userPickedWinner(p);
-                          if (!w) return null;
-                          if (!stageOc.winners.has(w) && !stageOc.losers.has(w)) return null;
-                          roundPts = stageOc.winners.has(w) ? (KO_PTS[stage] ?? 0) : 0;
-                        }
-                        const bonus = scoreTier === "exact" ? KO_EXACT_BONUS : scoreTier === "goalDiff" ? KO_GOAL_DIFF_BONUS : 0;
-                        return roundPts + bonus;
+                        return 0;
                       })();
                       return (
                         <div key={key}>
