@@ -258,23 +258,32 @@ export async function POST(request: NextRequest, ctx: { params: Promise<Params> 
       final: prediction.knockout.final,
     };
     const penaltyWinner = body.penaltyWinner ?? null;
+    // Reset userPredicted* so applyActual re-captures from the user's NEW pick.
+    // Without this, isFirstOverwrite=false (from the old capture) prevents the
+    // new home/away/penaltyWinner values from being recorded for scoring.
+    const resetCapture = {
+      userPredictedWinner: undefined,
+      userPredictedDraw: undefined,
+      userPredictedHome: undefined,
+      userPredictedAway: undefined,
+    };
     const arrayStages: Array<"r32" | "r16" | "qf" | "sf"> = ["r32", "r16", "qf", "sf"];
     let found = false;
     for (const stage of arrayStages) {
       const arr = nextKnockout[stage];
       const idx = arr.findIndex((p) => p.matchId === body.matchId);
       if (idx >= 0) {
-        arr[idx] = { ...arr[idx], home, away, penaltyWinner };
+        arr[idx] = { ...arr[idx], ...resetCapture, home, away, penaltyWinner };
         found = true;
         break;
       }
     }
     if (!found && nextKnockout.third?.matchId === body.matchId) {
-      nextKnockout.third = { ...nextKnockout.third, home, away, penaltyWinner };
+      nextKnockout.third = { ...nextKnockout.third, ...resetCapture, home, away, penaltyWinner };
       found = true;
     }
     if (!found && nextKnockout.final?.matchId === body.matchId) {
-      nextKnockout.final = { ...nextKnockout.final, home, away, penaltyWinner };
+      nextKnockout.final = { ...nextKnockout.final, ...resetCapture, home, away, penaltyWinner };
       found = true;
     }
     if (!found) {

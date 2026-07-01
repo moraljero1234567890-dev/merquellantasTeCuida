@@ -67,12 +67,16 @@ function userPickedWinner(p: KnockoutPick): string | null {
   return predictedWinnerCode(p);
 }
 
-// True if the user originally predicted a draw (equal FT scores → went to penalties).
-// For picks already overwritten by applyActual (userPredictedWinner set), p.home/away
-// are real scores — fall back to false rather than reading them as the user's prediction.
+// True if the user predicted a draw (equal FT scores → went to penalties).
+// Priority: explicit captured flag > captured home/away > current stored home/away.
+// The last fallback uses pick.home/away which may be the real score (overwritten), but
+// it's also what's displayed to the user — so it's the most consistent approximation
+// for pre-deploy picks where the original prediction wasn't captured.
 function userPredictedDrawPick(p: KnockoutPick): boolean {
-  if (p.userPredictedDraw !== undefined) return p.userPredictedDraw;
-  if (p.userPredictedWinner !== undefined) return false;
+  if (p.userPredictedDraw === true) return true;
+  if (p.userPredictedHome != null && p.userPredictedAway != null) {
+    return p.userPredictedHome === p.userPredictedAway;
+  }
   return p.home != null && p.away != null && p.home === p.away;
 }
 
