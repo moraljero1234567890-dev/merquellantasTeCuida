@@ -503,7 +503,8 @@ export default function PollaResultsPage() {
     for (const m of matches) {
       if (m.stage === "GROUP_STAGE" || m.status !== "FINISHED") continue;
       const ft = m.score?.fullTime;
-      if (ft && ft.home === ft.away && m.score?.penalties && m.home?.code && m.away?.code) {
+      // Any knockout FT draw always means a penalty shootout — don't require pens data.
+      if (ft && ft.home === ft.away && m.home?.code && m.away?.code) {
         penaltyDrawKeys.add(`${m.stage}|${[m.home.code, m.away.code].sort().join("|")}`);
       }
     }

@@ -109,7 +109,8 @@ function knockoutWinnersByStage(matches: MatchDoc[]): {
     if (!ft) continue;
 
     // Track matches that ended as FT draws (went to penalties).
-    if (ft.home === ft.away && pens && m.home?.code && m.away?.code) {
+    // Any knockout FT draw always means a penalty shootout — don't require pens data.
+    if (ft.home === ft.away && m.home?.code && m.away?.code) {
       penaltyDrawKeys.add(`${m.stage}|${[m.home.code, m.away.code].sort().join("|")}`);
     }
 
