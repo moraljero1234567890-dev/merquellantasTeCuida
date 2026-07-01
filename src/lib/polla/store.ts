@@ -342,13 +342,21 @@ export async function getLockStatus(): Promise<LockStatus> {
     return { groupLocked: true, knockoutOpen: false, editableStages: [], allGroupFinished: false, useActualStandings: false };
   }
 
-  // Knockout editing deadline: Sun Jul 20 2026 23:59 UTC (day after the Final).
-  // Per-match locking (getKnockoutLockInfo) handles individual game deadlines;
-  // this is just the global kill-switch once the entire tournament is over.
-  // Past this date all editing is closed; useActualStandings stays true so the
-  // results page can still rebuild brackets and show real scores.
-  const KNOCKOUT_DEADLINE = new Date("2026-07-20T23:59:00Z");
-  if (now >= KNOCKOUT_DEADLINE) {
+  // Between-round editing windows. Users may edit unplayed knockout picks only
+  // during the break between each round. Per-match locking (getKnockoutLockInfo)
+  // ensures already-played games stay locked even when a window is open.
+  // Add a new entry here before each round starts.
+  //
+  // All times are UTC. Colombia is UTC-5, so 11:00 COT = 16:00 UTC.
+  const KNOCKOUT_WINDOWS: Array<{ from: Date; to: Date }> = [
+    // R32 window: Jun 30 after last match → Jul 1 11:00 COT (16:00 UTC)
+    { from: new Date("2026-06-30T00:00:00Z"), to: new Date("2026-07-01T16:00:00Z") },
+    // R16 window: add here when the schedule is known.
+    // QF, SF, FINAL windows: add here as rounds are scheduled.
+  ];
+
+  const inEditingWindow = KNOCKOUT_WINDOWS.some((w) => now >= w.from && now < w.to);
+  if (!inEditingWindow) {
     return {
       groupLocked: true,
       knockoutOpen: false,
@@ -358,8 +366,8 @@ export async function getLockStatus(): Promise<LockStatus> {
     };
   }
 
-  // Live knockout phase: the group stage is locked, but users may edit each
-  // game until it kicks off (per-match lock via getKnockoutLockInfo).
+  // Inside an editing window: group stage locked, users may edit each unplayed
+  // knockout game until it kicks off (per-match lock via getKnockoutLockInfo).
   return {
     groupLocked: true,
     knockoutOpen: true,
