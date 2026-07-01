@@ -480,11 +480,21 @@ export function buildKnockoutFromGroup(
       // original scores and carry that forward so they can earn R32 points if
       // the anchor team they backed actually won.
       const prevWinner = userPickWinner(prev);
-      // Only credit if they backed the home (anchor) team; if they backed the
-      // predicted-wrong away team, that team isn't in the real match.
+      // Map winner to real team codes: home-anchor is unchanged; away slot
+      // changed (different 3rd-place qualifier), but the user's "away team wins"
+      // pick maps directly to the real away team — the scores they entered
+      // (home X, away Y) still represent CIV's and the opponent's goals.
       const capturedWinner =
-        prevWinner === prev.homeTeamCode ? prev.homeTeamCode : null;
-      return applyActual({ ...fresh, userPredictedWinner: capturedWinner });
+        prevWinner === prev.homeTeamCode ? fresh.homeTeamCode :
+        prevWinner === prev.awayTeamCode ? fresh.awayTeamCode :
+        null;
+      // Preserve the user's predicted scores so exact-score points work.
+      return applyActual({
+        ...fresh,
+        userPredictedWinner: capturedWinner,
+        userPredictedHome: prev.home,
+        userPredictedAway: prev.away,
+      });
     }
     return applyActual(fresh);
   });
