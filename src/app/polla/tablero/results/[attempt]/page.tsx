@@ -544,7 +544,7 @@ export default function PollaResultsPage() {
       if (realIsDraw && predictedDraw) {
         result.winner += 1;
         result.total += KO_WIN;
-      } else if (!realIsDraw) {
+      } else if (!realIsDraw && !predictedDraw) {
         const realWinnerCode = realHome > realAway ? pick.homeTeamCode : pick.awayTeamCode;
         const userWinnerCode = userHome > userAway ? pick.homeTeamCode : pick.awayTeamCode;
         if (userWinnerCode === realWinnerCode) {
@@ -867,7 +867,7 @@ export default function PollaResultsPage() {
                     const realIsDraw = realHome === realAway;
                     const predictedDraw = userHome === userAway;
                     if (realIsDraw && predictedDraw) return KO_WIN;
-                    if (!realIsDraw) {
+                    if (!realIsDraw && !predictedDraw) {
                       const realWinnerCode = realHome > realAway ? pick.homeTeamCode : pick.awayTeamCode;
                       const userWinnerCode = userHome > userAway ? pick.homeTeamCode : pick.awayTeamCode;
                       if (userWinnerCode === realWinnerCode) return KO_WIN;
@@ -974,7 +974,7 @@ export default function PollaResultsPage() {
                         const realIsDraw = realHome === realAway;
                         const predictedDraw = userHome === userAway;
                         if (realIsDraw && predictedDraw) return KO_WIN;
-                        if (!realIsDraw) {
+                        if (!realIsDraw && !predictedDraw) {
                           const realWinnerCode = realHome > realAway ? p.homeTeamCode : p.awayTeamCode;
                           const userWinnerCode = userHome > userAway ? p.homeTeamCode : p.awayTeamCode;
                           if (userWinnerCode === realWinnerCode) return KO_WIN;

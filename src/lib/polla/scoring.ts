@@ -1,6 +1,7 @@
 import "server-only";
-import type { KnockoutPick, MatchDoc, PredictionDoc } from "./types";
+import type { GroupScore, KnockoutPick, MatchDoc, PredictionDoc } from "./types";
 import { groupMatchResult } from "./group-points";
+import { buildKnockoutFromGroup, buildR32SeedsFromActual, computeGroupStandings } from "./bracket";
 
 export const POINTS = {
   GROUP_OUTCOME: 30,
@@ -120,8 +121,6 @@ export function computeLeaderboard(
   users: { email: string; name: string; attemptsAllowed: number }[],
 ): LeaderboardRow[] {
   const groupReal = finishedGroupMatches(matches);
-  const realResultById = new Map<string, { home: number; away: number }>();
-  for (const m of groupReal) realResultById.set(m.id, { home: m.home, away: m.away });
 
   const knockReal = knockoutFinalResult(matches);
 
@@ -133,6 +132,73 @@ export function computeLeaderboard(
     const ft = m.score?.fullTime;
     if (!ft || !m.home?.code || !m.away?.code) continue;
     realFTMap.set(`${m.stage}|${[m.home.code, m.away.code].sort().join("|")}`, { homeCode: m.home.code, ft });
+  }
+
+  // Recompute knockout brackets from actual group standings so team codes in
+  // stored predictions (which may have been built from the user's predicted
+  // standings) always match the real fixtures. Without this, users who haven't
+  // reloaded their bracket page since the group stage ended get 0 knockout pts
+  // because their stored team codes never got updated.
+  const groupMatchesList = matches.filter((m) => m.stage === "GROUP_STAGE" && m.group);
+  const actualGroupScores: Record<string, GroupScore> = {};
+  for (const m of matches) {
+    if (m.stage === "GROUP_STAGE" && m.status === "FINISHED" && m.score?.fullTime) {
+      actualGroupScores[m._id] = { home: m.score.fullTime.home, away: m.score.fullTime.away };
+    }
+  }
+  const actualStandings = computeGroupStandings(groupMatchesList, actualGroupScores);
+
+  const actualR32Fixtures = matches
+    .filter((m) => m.stage === "ROUND_OF_32")
+    .map((m) => ({ home: { code: m.home.code, name: m.home.name }, away: { code: m.away.code, name: m.away.name } }));
+  const r32Override = buildR32SeedsFromActual(actualStandings, actualR32Fixtures) ?? undefined;
+
+  // actualByPair: keyed by sorted team codes, for applyActual inside buildKnockoutFromGroup.
+  const actualByPair = new Map<string, { winnerCode: string | null; byCode: Record<string, number> }>();
+  for (const m of matches) {
+    if (m.stage === "GROUP_STAGE" || m.status !== "FINISHED") continue;
+    const ft = m.score?.fullTime;
+    if (!ft || !m.home?.code || !m.away?.code) continue;
+    const pens = m.score?.penalties;
+    const winnerCode =
+      ft.home > ft.away ? m.home.code
+      : ft.away > ft.home ? m.away.code
+      : pens && pens.home > pens.away ? m.home.code
+      : pens && pens.away > pens.home ? m.away.code
+      : null;
+    actualByPair.set([m.home.code, m.away.code].sort().join("|"), {
+      winnerCode,
+      byCode: { [m.home.code]: ft.home, [m.away.code]: ft.away },
+    });
+  }
+  // Infer winners from next-round fixtures when penalty data is missing.
+  const NEXT_STAGE: Partial<Record<string, string>> = {
+    ROUND_OF_32: "ROUND_OF_16", ROUND_OF_16: "QUARTER_FINALS",
+    QUARTER_FINALS: "SEMI_FINALS", SEMI_FINALS: "FINAL",
+  };
+  const teamsPerStage = new Map<string, Set<string>>();
+  for (const m of matches) {
+    if (m.home?.code && m.away?.code) {
+      const s = teamsPerStage.get(m.stage) ?? new Set<string>();
+      s.add(m.home.code); s.add(m.away.code);
+      teamsPerStage.set(m.stage, s);
+    }
+  }
+  for (const [key, entry] of actualByPair) {
+    if (entry.winnerCode !== null) continue;
+    const codes = Object.keys(entry.byCode);
+    if (codes.length !== 2) continue;
+    const pairMatch = matches.find(
+      (m) => m.status === "FINISHED" && m.home?.code && m.away?.code &&
+        [m.home.code, m.away.code].sort().join("|") === key,
+    );
+    if (!pairMatch) continue;
+    const nextStage = NEXT_STAGE[pairMatch.stage];
+    if (!nextStage) continue;
+    const nextTeams = teamsPerStage.get(nextStage) ?? new Set<string>();
+    const [codeA, codeB] = codes;
+    if (nextTeams.has(codeA) && !nextTeams.has(codeB)) entry.winnerCode = codeA;
+    else if (nextTeams.has(codeB) && !nextTeams.has(codeA)) entry.winnerCode = codeB;
   }
 
   const userByEmail = new Map(users.map((u) => [u.email, u]));
@@ -167,17 +233,22 @@ export function computeLeaderboard(
       br.group.points += points;
     }
 
+    // Recompute this prediction's knockout bracket from actual standings so that
+    // team codes match the real fixtures even for users who haven't reloaded
+    // their bracket page since the group stage ended.
+    const ko = buildKnockoutFromGroup(actualStandings, p.knockout, r32Override, actualByPair);
+
     // Flat knockout scoring: each pick earns 100 pts for an exact FT score,
     // 50 pts for the correct winner or a correctly predicted draw (FT tie),
     // or 0 pts. For draws: the penalty winner is irrelevant — only the FT
     // score matters. Applies to all rounds including the final.
     const allKnockoutPicks = [
-      ...p.knockout.r32,
-      ...p.knockout.r16,
-      ...p.knockout.qf,
-      ...p.knockout.sf,
-      ...(p.knockout.third ? [p.knockout.third] : []),
-      ...(p.knockout.final ? [p.knockout.final] : []),
+      ...ko.r32,
+      ...ko.r16,
+      ...ko.qf,
+      ...ko.sf,
+      ...(ko.third ? [ko.third] : []),
+      ...(ko.final ? [ko.final] : []),
     ];
     for (const pick of allKnockoutPicks) {
       if (!pick.homeTeamCode || !pick.awayTeamCode) continue;
@@ -220,7 +291,7 @@ export function computeLeaderboard(
 
     // Champion / runner-up: use userPredictedWinner on the final pick so scoring
     // stays correct after the final is played and applyActual overwrites the scores.
-    const finalPick = p.knockout.final;
+    const finalPick = ko.final;
     const myChampion =
       finalPick
         ? finalPick.userPredictedWinner !== undefined
