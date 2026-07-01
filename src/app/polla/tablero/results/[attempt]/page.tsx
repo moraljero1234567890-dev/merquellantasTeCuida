@@ -77,9 +77,12 @@ function userPredictedDrawPick(p: KnockoutPick): boolean {
 }
 
 // User's originally predicted FT score (captured before applyActual).
+// Uses != null (matches both null and undefined) so that pre-deploy picks where
+// userPredictedHome was captured as null still fall back to pick.home/away —
+// better to show the real score than "—" when the original prediction is gone.
 function userPredictedScore(p: KnockoutPick): { home: number; away: number } | null {
-  const h = p.userPredictedHome !== undefined ? p.userPredictedHome : p.home;
-  const a = p.userPredictedAway !== undefined ? p.userPredictedAway : p.away;
+  const h = (p.userPredictedHome != null) ? p.userPredictedHome : p.home;
+  const a = (p.userPredictedAway != null) ? p.userPredictedAway : p.away;
   if (h == null || a == null) return null;
   return { home: h, away: a };
 }
@@ -118,10 +121,18 @@ function koScoreTierForPick(
   // Normalize real FT to pick's home/away team orientation.
   const realHome = real.home.code === pick.homeTeamCode ? ft.home : ft.away;
   const realAway = real.home.code === pick.homeTeamCode ? ft.away : ft.home;
-  const pred = userPredictedScore(pick);
-  if (!pred) return null;
-  if (pred.home === realHome && pred.away === realAway) return "exact";
-  if (pred.home - pred.away === realHome - realAway) return "goalDiff";
+  // Use strict null check (not != null) so pre-deploy picks where userPredictedHome
+  // was set to null by the isFirstOverwrite guard don't fall back to pick.home (real
+  // score) and accidentally earn a free exact bonus.
+  const userHome = (pick.userPredictedHome != null) ? pick.userPredictedHome
+    : (pick.userPredictedHome === undefined) ? pick.home
+    : null; // explicitly null → pre-deploy pick, no original score available
+  const userAway = (pick.userPredictedAway != null) ? pick.userPredictedAway
+    : (pick.userPredictedAway === undefined) ? pick.away
+    : null;
+  if (userHome == null || userAway == null) return null;
+  if (userHome === realHome && userAway === realAway) return "exact";
+  if (userHome - userAway === realHome - realAway) return "goalDiff";
   return null;
 }
 
