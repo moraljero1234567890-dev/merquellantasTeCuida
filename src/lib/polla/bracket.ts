@@ -466,7 +466,24 @@ export function buildKnockoutFromGroup(
       prev.awayTeamCode === fresh.awayTeamCode
     ) {
       // Full match: preserve user's score and captured winner.
-      return applyActual({ ...fresh, home: prev.home, away: prev.away, penaltyWinner: prev.penaltyWinner, userPredictedWinner: prev.userPredictedWinner, userPredictedDraw: prev.userPredictedDraw, userPredictedHome: prev.userPredictedHome, userPredictedAway: prev.userPredictedAway });
+      // Recovery: when the score captures are null (lost by an earlier bug) but
+      // prev.home has a value (written by applyActual), drop the null captures so
+      // applyActual re-derives them from prev.home/away on the next pass.
+      // When prev.home is also null the user never entered a pick, so keep null
+      // to correctly score 0 pts.
+      const forceRecapture = prev.userPredictedHome === null && prev.home != null;
+      return applyActual({
+        ...fresh,
+        home: prev.home,
+        away: prev.away,
+        penaltyWinner: prev.penaltyWinner,
+        ...(forceRecapture ? {} : {
+          userPredictedWinner: prev.userPredictedWinner,
+          userPredictedDraw: prev.userPredictedDraw,
+          userPredictedHome: prev.userPredictedHome,
+          userPredictedAway: prev.userPredictedAway,
+        }),
+      });
     }
     if (
       prev &&
@@ -509,12 +526,17 @@ export function buildKnockoutFromGroup(
     const sameTeams =
       prev.homeTeamCode === fresh.homeTeamCode &&
       prev.awayTeamCode === fresh.awayTeamCode;
+    // Recovery: same as the R32 full-match branch — when score captures were lost
+    // (null) but prev.home has a value, drop the null captures so applyActual
+    // re-derives them from prev.home/away. Skip when prev.home is also null
+    // (user never entered a pick — don't award phantom points).
+    const forceRecapture = sameTeams && prev.userPredictedHome === null && prev.home != null;
     return {
       ...fresh,
       home: prev.home,
       away: prev.away,
       penaltyWinner: prev.penaltyWinner,
-      ...(sameTeams
+      ...(sameTeams && !forceRecapture
         ? {
             userPredictedWinner: prev.userPredictedWinner,
             userPredictedDraw: prev.userPredictedDraw,
