@@ -350,13 +350,10 @@ export async function getLockStatus(): Promise<LockStatus> {
   // All times are UTC. Colombia (COT) is UTC-5:
   //   7:00 PM COT = 00:00 UTC next day
   const KNOCKOUT_WINDOWS: Array<{ from: Date; to: Date }> = [
-    // R32 window: Jun 29 (first R32 kick-off) → Jul 4 00:00 UTC (7 PM COT Jul 3).
-    // Per-match locking handles individual games once they kick off — this window
-    // just keeps the bracket editable for games that haven't started yet.
-    { from: new Date("2026-06-29T00:00:00Z"), to: new Date("2026-07-04T00:00:00Z") },
-    // R16 window: add here when the schedule is known (approx Jul 5-8).
-    // QF, SF, FINAL windows: add here as rounds are scheduled.
-  ];
+  // R32 window: Jun 29 (first R32 kick-off) → Jul 2 00:00 UTC (7 PM COT Jul 1).
+  { from: new Date("2026-06-29T00:00:00Z"), to: new Date("2026-07-02T00:00:00Z") },
+  // R16 window: add here when the schedule is known (approx Jul 5-8).
+];
 
   const inEditingWindow = KNOCKOUT_WINDOWS.some((w) => now >= w.from && now < w.to);
   if (!inEditingWindow) {
