@@ -352,11 +352,24 @@ export async function GET(req: NextRequest) {
   // exception — they oversee every city and MAY narrow to one via ?ciudad=.
   // The scope is taken from the session (never trusted from the client) for
   // regular users, so it can't be bypassed. Search stays global (any plate is
-  // findable). A non-admin with no city set sees nothing here.
+  // findable).
+  // Legacy note: orders created before ciudad was added to the stamping code
+  // have no ciudad field at all. We include those "unclaimed" orders alongside
+  // the user's city so they are never permanently buried.
   const isAdmin = session.user.rol === 'admin';
   const applyCityScope = (filter: Record<string, unknown>) => {
     if (!isAdmin) {
-      filter.ciudad = clean(session.user.ciudad);
+      const ciudad = clean(session.user.ciudad);
+      // Always surface legacy orders (no ciudad field / empty ciudad) so they
+      // remain reachable after mandatory city scoping was introduced.
+      const unclaimed = { ciudad: { $in: [null, ''] } };
+      if (ciudad) {
+        filter.$or = [{ ciudad }, unclaimed];
+      } else {
+        // User with no city set: only unclaimed orders (consistent with how
+        // the order was stamped — also with empty ciudad on the session).
+        Object.assign(filter, unclaimed);
+      }
       return;
     }
     // Admin: optional city narrowing; no param = every city.

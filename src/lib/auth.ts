@@ -54,6 +54,14 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
           // alerts/revisiones to a single shop and to stamp every order.
           token.ciudad = dbUser.ciudad || null;
         }
+      } else if (!('ciudad' in token) && token.email) {
+        // One-time backfill: tokens created before the ciudad field was added
+        // to the JWT don't carry it, so session.user.ciudad would be null and
+        // the alerts city filter would return nothing. Re-fetch from the DB
+        // once; subsequent requests use the value cached in the JWT cookie.
+        const db = await getDb();
+        const dbUser = await db.collection('users').findOne({ email: token.email as string });
+        if (dbUser) token.ciudad = dbUser.ciudad || null;
       }
       return token;
     },
