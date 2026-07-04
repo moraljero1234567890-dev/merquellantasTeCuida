@@ -204,9 +204,9 @@ function PredictedMatchCard({
   return (
     <li
       className={`border p-3 ${
-        advanced === true
+        pts !== null && pts > 0
           ? "border-emerald-600 bg-emerald-50"
-          : advanced === false
+          : pts === 0
             ? "border-red-300 bg-red-50/60"
             : "border-[var(--line)] bg-white"
       }`}
