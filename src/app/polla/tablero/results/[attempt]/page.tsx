@@ -141,35 +141,35 @@ function MiniMatch({
   pen: boolean;
 }) {
   return (
-    <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-2">
-      <div className="flex items-center justify-end gap-2 text-right text-sm font-bold uppercase tracking-tight">
-        <span>{h.name || "—"}</span>
+    <div className="grid grid-cols-[1fr_auto_1fr] items-center gap-1.5">
+      <div className="flex min-w-0 items-center justify-end gap-1.5 text-right text-xs font-bold uppercase tracking-tight sm:text-sm">
+        <span className="truncate">{h.name || "—"}</span>
         {h.crest && (
           /* eslint-disable-next-line @next/next/no-img-element */
           <img
             src={h.crest}
             alt=""
             aria-hidden
-            className="h-6 w-9 shrink-0 border border-[var(--line)] object-cover"
+            className="h-5 w-7 shrink-0 border border-[var(--line)] object-cover sm:h-6 sm:w-9"
           />
         )}
       </div>
-      <span className="font-mono text-lg font-black tabular-nums">
+      <span className="whitespace-nowrap px-1 font-mono text-base font-black tabular-nums sm:text-lg">
         {home != null && away != null
-          ? `${home}–${away}${pen ? " (pen)" : ""}`
+          ? `${home}–${away}${pen ? " (p)" : ""}`
           : "—"}
       </span>
-      <div className="flex items-center gap-2 text-sm font-bold uppercase tracking-tight">
+      <div className="flex min-w-0 items-center gap-1.5 text-xs font-bold uppercase tracking-tight sm:text-sm">
         {a.crest && (
           /* eslint-disable-next-line @next/next/no-img-element */
           <img
             src={a.crest}
             alt=""
             aria-hidden
-            className="h-6 w-9 shrink-0 border border-[var(--line)] object-cover"
+            className="h-5 w-7 shrink-0 border border-[var(--line)] object-cover sm:h-6 sm:w-9"
           />
         )}
-        <span>{a.name || "—"}</span>
+        <span className="truncate">{a.name || "—"}</span>
       </div>
     </div>
   );
@@ -218,15 +218,7 @@ function PredictedMatchCard({
         away={pred?.away ?? null}
         pen={userPredictedDrawPick(pick) && !!pick.penaltyWinner}
       />
-      <div className="mt-2 flex items-center justify-between gap-2">
-        <div className="font-mono text-[10px] font-black uppercase tracking-[0.2em]">
-          {advanced === true && winnerName && (
-            <span className="text-emerald-700">{winnerName} avanzó ✓</span>
-          )}
-          {advanced === false && winnerName && (
-            <span className="text-red-600">{winnerName} eliminado ✗</span>
-          )}
-        </div>
+      <div className="mt-2 flex items-center justify-end gap-2">
         <div className="flex items-center gap-1.5">
           {scoreTier === "exact" && (
             <span className="rounded-sm bg-emerald-600 px-1.5 py-0.5 font-mono text-[9px] font-black uppercase tracking-[0.15em] text-white">
@@ -899,8 +891,8 @@ export default function PollaResultsPage() {
                       <h3 className="mb-3 font-mono text-xs font-bold uppercase tracking-[0.3em]">
                         {STAGE_TITLES[stage]}
                       </h3>
-                      {/* Column headers */}
-                      <div className="mb-1 grid grid-cols-2 gap-3">
+                      {/* Column headers — only visible when side-by-side */}
+                      <div className="mb-1 hidden sm:grid sm:grid-cols-2 gap-3">
                         <div className="font-mono text-[10px] uppercase tracking-[0.28em] text-[var(--foreground-muted)]">Tu llave</div>
                         <div className="font-mono text-[10px] uppercase tracking-[0.28em] text-[var(--foreground-muted)]">Resultado real</div>
                       </div>
@@ -912,7 +904,7 @@ export default function PollaResultsPage() {
                             const realMatch = realByTeamPair.get(pairKey) ?? null;
                             if (realMatch) matchedRealIds.add(realMatch._id);
                             return (
-                              <div key={p.matchId} className="grid grid-cols-2 gap-3">
+                              <div key={p.matchId} className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                 <ul>
                                   <PredictedMatchCard
                                     pick={p}
@@ -936,7 +928,7 @@ export default function PollaResultsPage() {
                         ) : (
                           // No user picks at all for this stage
                           real.map((m) => (
-                            <div key={m._id} className="grid grid-cols-2 gap-3">
+                            <div key={m._id} className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                               <ul>
                                 <li className="border border-dashed border-[var(--line)] p-3 text-xs text-[var(--foreground-muted)]">
                                   No completaste esta ronda.
@@ -948,7 +940,7 @@ export default function PollaResultsPage() {
                         )}
                         {/* Any real matches with no matching user pick (should be rare) */}
                         {real.filter((m) => !matchedRealIds.has(m._id)).map((m) => (
-                          <div key={m._id} className="grid grid-cols-2 gap-3">
+                          <div key={m._id} className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                             <ul>
                               <li className="border border-dashed border-[var(--line)] p-3 text-xs text-[var(--foreground-muted)]">
                                 Sin pronóstico para este partido.
@@ -1008,11 +1000,11 @@ export default function PollaResultsPage() {
                           <h3 className="mb-1 font-mono text-xs font-bold uppercase tracking-[0.3em]">
                             {STAGE_TITLES[stage]}
                           </h3>
-                          <div className="mb-1 grid grid-cols-2 gap-3">
+                          <div className="mb-1 hidden sm:grid sm:grid-cols-2 gap-3">
                             <div className="font-mono text-[10px] uppercase tracking-[0.28em] text-[var(--foreground-muted)]">Tu llave</div>
                             <div className="font-mono text-[10px] uppercase tracking-[0.28em] text-[var(--foreground-muted)]">Resultado real</div>
                           </div>
-                          <div className="grid grid-cols-2 gap-3">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                             <ul>
                               <PredictedMatchCard
                                 pick={p}
