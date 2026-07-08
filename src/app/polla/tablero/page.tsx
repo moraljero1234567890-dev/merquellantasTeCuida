@@ -169,6 +169,28 @@ export default function PollaDashboardPage() {
       </header>
 
       <main className="flex-1">
+        {/* ULTIMA OPORTUNIDAD BANNER */}
+        <div className="border-b-4 border-red-700 bg-red-600 text-white">
+          <div className="mx-auto max-w-6xl px-6 py-4">
+            <p className="font-mono text-[10px] font-bold uppercase tracking-[0.3em] text-red-200">
+              Aviso urgente
+            </p>
+            <p className="mt-1 text-lg font-black uppercase leading-tight md:text-2xl">
+              Esta sera la ultima vez que podras editar tus pronosticos
+            </p>
+            <p className="mt-1 text-sm font-semibold text-red-100">
+              Ventana abierta hasta el{" "}
+              <strong className="text-white underline decoration-red-200">
+                miercoles 9 de julio a las 3:00 PM hora Colombia.
+              </strong>{" "}
+              Edita tu boleta con los equipos reales de cuartos y registra tu campeón y subcampeón.
+            </p>
+            <p className="mt-1.5 font-mono text-[11px] uppercase tracking-[0.25em] text-red-200">
+              Despues de este plazo los pronosticos quedaran cerrados definitivamente.
+            </p>
+          </div>
+        </div>
+
         <section className="border-b border-[var(--line)] bg-[var(--foreground)] text-white">
           <div className="mx-auto max-w-6xl px-6 py-12">
             <p className="font-mono text-[11px] uppercase tracking-[0.32em] text-[var(--brand)]">

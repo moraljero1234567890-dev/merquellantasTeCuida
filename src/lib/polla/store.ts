@@ -354,6 +354,9 @@ export async function getLockStatus(): Promise<LockStatus> {
   { from: new Date("2026-06-29T00:00:00Z"), to: new Date("2026-07-02T00:00:00Z") },
   // R16 window: Jul 2 00:00 UTC → Jul 4 17:00 UTC (12 PM COT Jul 4, first R16 kick-off).
   { from: new Date("2026-07-02T00:00:00Z"), to: new Date("2026-07-04T17:00:00Z") },
+  // QF/SF final edit window: Jul 8 10:30 AM COT (15:30 UTC) → Jul 9 3:00 PM COT (20:00 UTC).
+  // LAST chance for users to update their full bracket before QF kicks off.
+  { from: new Date("2026-07-08T15:30:00Z"), to: new Date("2026-07-09T20:00:00Z") },
 ];
 
   const inEditingWindow = KNOCKOUT_WINDOWS.some((w) => now >= w.from && now < w.to);

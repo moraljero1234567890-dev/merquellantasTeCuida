@@ -97,6 +97,36 @@ export default function PollaHome() {
       </header>
 
       <main className="flex-1">
+        {/* ULTIMA OPORTUNIDAD BANNER */}
+        <div className="border-b-4 border-red-700 bg-red-600 text-white">
+          <div className="mx-auto max-w-6xl px-6 py-4">
+            <p className="font-mono text-[11px] font-bold uppercase tracking-[0.3em] text-red-200">
+              Aviso urgente · Polla Mundialista
+            </p>
+            <p className="mt-1 text-xl font-black uppercase leading-tight md:text-2xl">
+              Esta sera la ultima vez que podras editar tus pronosticos
+            </p>
+            <p className="mt-2 text-base font-semibold text-red-100">
+              La ventana de edicion esta abierta{" "}
+              <strong className="text-white underline decoration-red-200">
+                solo hasta el miercoles 9 de julio a las 3:00 PM hora Colombia.
+              </strong>{" "}
+              Ingresa, actualiza tu boleta con los resultados de octavos y asegurate de pronosticar campeón y subcampeón.
+            </p>
+            <div className="mt-3 flex flex-wrap items-center gap-3">
+              <a
+                href="/polla/login"
+                className="inline-flex h-10 items-center justify-center bg-white px-6 font-mono text-xs font-black uppercase tracking-[0.2em] text-red-700 transition hover:bg-red-50"
+              >
+                Entrar y editar ahora
+              </a>
+              <span className="font-mono text-xs uppercase tracking-[0.2em] text-red-200">
+                Cierre: Mier 9 Jul · 3:00 PM COT
+              </span>
+            </div>
+          </div>
+        </div>
+
         {/* HERO */}
         <section className="relative isolate overflow-hidden bg-[var(--foreground)] text-white">
           {/* eslint-disable-next-line @next/next/no-img-element */}

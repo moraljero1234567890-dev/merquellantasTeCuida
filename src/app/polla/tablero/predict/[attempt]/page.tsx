@@ -975,6 +975,29 @@ export default function PollaPredictPage() {
       </header>
 
       <main className="flex-1">
+        {/* ULTIMA OPORTUNIDAD BANNER — always visible during the QF edit window */}
+        <div className="border-b-4 border-red-700 bg-red-600 text-white">
+          <div className="mx-auto max-w-6xl px-6 py-4">
+            <p className="font-mono text-[10px] font-bold uppercase tracking-[0.3em] text-red-200">
+              Aviso urgente
+            </p>
+            <p className="mt-1 text-xl font-black uppercase leading-tight md:text-3xl">
+              Esta sera la ultima vez que podras editar tus pronosticos
+            </p>
+            <p className="mt-2 text-sm font-semibold text-red-100 md:text-base">
+              La ventana de edicion cierra el{" "}
+              <strong className="text-white">
+                miercoles 9 de julio a las 3:00 PM hora Colombia (COT).
+              </strong>{" "}
+              Despues de ese plazo tu boleta quedara bloqueada definitivamente.
+              Actualiza tus cuartos de final, semifinales, final, tercer puesto, campeon y subcampeon ahora.
+            </p>
+            <p className="mt-2 font-mono text-[11px] font-black uppercase tracking-[0.28em] text-red-200">
+              No habra mas ventanas de edicion — es tu ultima oportunidad.
+            </p>
+          </div>
+        </div>
+
         <section className="border-b border-[var(--line)] bg-[var(--foreground)] text-white">
           <div className="mx-auto max-w-6xl px-6 py-12">
             <p className="font-mono text-[11px] uppercase tracking-[0.32em] text-[var(--brand)]">
@@ -1065,6 +1088,19 @@ export default function PollaPredictPage() {
             {lockStatus?.groupLocked && lockStatus.allGroupFinished && !lockStatus.knockoutOpen && (
               <div className="mx-auto mt-6 max-w-6xl border-l-4 border-amber-500 bg-amber-50 p-4 px-6 text-sm text-amber-800">
                 La ronda actual está en juego. Los pronósticos se abrirán cuando termine esta ronda.
+              </div>
+            )}
+
+            {lockStatus?.knockoutOpen && (
+              <div className="mx-auto mt-6 max-w-6xl border-4 border-red-600 bg-red-50 p-4 px-6">
+                <p className="font-mono text-[10px] font-black uppercase tracking-[0.3em] text-red-700">
+                  Ultima oportunidad de edicion
+                </p>
+                <p className="mt-1 text-sm font-bold text-red-800">
+                  Esta es la ultima ventana para editar tu boleta. Cierre definitivo:{" "}
+                  <strong>miercoles 9 de julio a las 3:00 PM hora Colombia.</strong>{" "}
+                  Despues de ese momento no podras hacer ningun cambio. Asegurate de completar cuartos, semifinales, final y elegir tu campeon.
+                </p>
               </div>
             )}
 
