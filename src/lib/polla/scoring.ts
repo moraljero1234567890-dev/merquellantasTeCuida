@@ -248,6 +248,11 @@ export function computeLeaderboard(
       ...(ko.third ? [ko.third] : []),
       ...(ko.final ? [ko.final] : []),
     ];
+    // Whether this user ever filled group predictions. Empty-groupScores users
+    // are ones who never engaged — their stored userPredicted* fields are likely
+    // phantom captures from earlier bugs and must be ignored for scoring.
+    const userHasGroupPicks = Object.keys(p.groupScores).length > 0;
+
     for (const pick of allKnockoutPicks) {
       if (!pick.homeTeamCode || !pick.awayTeamCode) continue;
       const key = `${pick.stage}|${[pick.homeTeamCode, pick.awayTeamCode].sort().join("|")}`;
@@ -258,11 +263,22 @@ export function computeLeaderboard(
       const realAway = entry.homeCode === pick.homeTeamCode ? entry.ft.away : entry.ft.home;
       const realIsDraw = realHome === realAway;
 
-      // Read ONLY from the explicit user-entry map — never from bracket fields.
+      // Score priority:
+      // 1. knockoutPicks entry (written only by POST — immune to applyActual corruption)
+      // 2. userPredictedHome/Away (old format) but ONLY for users who have group picks
+      //    (gate proves engagement; empty-groupScores users have phantom captures)
+      // 3. null → 0 pts
       const koPick = p.knockoutPicks?.[pick.matchId];
-      if (!koPick || typeof koPick.home !== "number" || typeof koPick.away !== "number") continue;
-      const userHome = koPick.home;
-      const userAway = koPick.away;
+      let userHome: number | null = null;
+      let userAway: number | null = null;
+      if (koPick && typeof koPick.home === "number" && typeof koPick.away === "number") {
+        userHome = koPick.home;
+        userAway = koPick.away;
+      } else if (userHasGroupPicks && typeof pick.userPredictedHome === "number" && typeof pick.userPredictedAway === "number") {
+        userHome = pick.userPredictedHome;
+        userAway = pick.userPredictedAway;
+      }
+      if (userHome === null || userAway === null) continue;
 
       if (userHome === realHome && userAway === realAway) {
         br.knockout.exact += 1;
@@ -284,25 +300,26 @@ export function computeLeaderboard(
       }
     }
 
-    // Champion / runner-up: derive from the user's explicit final pick entry.
+    // Champion / runner-up. Same priority: knockoutPicks first, then legacy
+    // userPredictedWinner (gated on having group picks).
     const finalPick = ko.final;
     const finalKoPick = finalPick ? p.knockoutPicks?.[finalPick.matchId] : undefined;
     let myChampion: string | null = null;
     let myRunnerUp: string | null = null;
     if (finalPick && finalKoPick && typeof finalKoPick.home === "number" && typeof finalKoPick.away === "number") {
       if (finalKoPick.home > finalKoPick.away) {
-        myChampion = finalPick.homeTeamCode;
-        myRunnerUp = finalPick.awayTeamCode;
+        myChampion = finalPick.homeTeamCode; myRunnerUp = finalPick.awayTeamCode;
       } else if (finalKoPick.away > finalKoPick.home) {
-        myChampion = finalPick.awayTeamCode;
-        myRunnerUp = finalPick.homeTeamCode;
+        myChampion = finalPick.awayTeamCode; myRunnerUp = finalPick.homeTeamCode;
       } else if (finalKoPick.penaltyWinner === "home") {
-        myChampion = finalPick.homeTeamCode;
-        myRunnerUp = finalPick.awayTeamCode;
+        myChampion = finalPick.homeTeamCode; myRunnerUp = finalPick.awayTeamCode;
       } else if (finalKoPick.penaltyWinner === "away") {
-        myChampion = finalPick.awayTeamCode;
-        myRunnerUp = finalPick.homeTeamCode;
+        myChampion = finalPick.awayTeamCode; myRunnerUp = finalPick.homeTeamCode;
       }
+    } else if (finalPick && userHasGroupPicks && typeof finalPick.userPredictedWinner === "string") {
+      myChampion = finalPick.userPredictedWinner;
+      myRunnerUp = myChampion === finalPick.homeTeamCode ? finalPick.awayTeamCode
+        : myChampion === finalPick.awayTeamCode ? finalPick.homeTeamCode : null;
     }
 
     const gotChampion = !!knockReal.champion && myChampion === knockReal.champion;
