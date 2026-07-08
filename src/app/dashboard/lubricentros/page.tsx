@@ -674,6 +674,9 @@ export default function LubricentrosPage() {
 
   // Add another line item of the same category right below row i, so multiple
   // products of one category (e.g. two oils) can be recorded on one vehicle.
+  // The new row inherits exento_iva from the parent so both rows of the same
+  // service default to the same IVA treatment — avoids silently taxing a second
+  // oil entry when the first was already marked exempt.
   const addServicio = (i: number) =>
     setServicios((rows) => {
       const copy = [...rows];
@@ -683,7 +686,7 @@ export default function LubricentrosPage() {
         unidad: '',
         valor_unitario: '',
         subtotal: '',
-        exento_iva: false,
+        exento_iva: rows[i].exento_iva,
       });
       return copy;
     });
@@ -1496,7 +1499,13 @@ export default function LubricentrosPage() {
                     </div>
                   </div>
                   <div>
-                    <span className="block text-xs font-medium text-gray-500 mb-1">IVA (19%)</span>
+                    <span className="block text-xs font-medium text-gray-500 mb-1">
+                      IVA (19%){totalIvaBase < totalSubtotal && (
+                        <span className="ml-1 text-gray-400 font-normal">
+                          sobre {formatMoney(totalIvaBase)}
+                        </span>
+                      )}
+                    </span>
                     <div className="rounded-lg border border-gray-200 bg-gray-50 py-2 px-3 text-sm text-gray-900">
                       {formatMoney(totalIva)}
                     </div>
