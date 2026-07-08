@@ -987,7 +987,7 @@ export default function PollaPredictPage() {
             <p className="mt-2 text-sm font-semibold text-red-100 md:text-base">
               Ventana abierta{" "}
               <strong className="text-white">
-                desde hoy martes 8 de julio a las 10:30 AM hasta el miercoles 9 de julio a las 3:00 PM hora Colombia (COT).
+                desde hoy miercoles 8 de julio a las 10:30 AM hasta manana jueves 9 de julio a las 3:00 PM hora Colombia (COT).
               </strong>{" "}
               Despues de ese plazo tu boleta quedara bloqueada definitivamente y no podras hacer ningun cambio.
             </p>

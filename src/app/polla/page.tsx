@@ -109,7 +109,7 @@ export default function PollaHome() {
             <p className="mt-2 text-base font-semibold text-red-100">
               La ventana de edicion esta abierta{" "}
               <strong className="text-white underline decoration-red-200">
-                desde hoy martes 8 de julio a las 10:30 AM hasta el miercoles 9 de julio a las 3:00 PM hora Colombia.
+                desde hoy miercoles 8 de julio a las 10:30 AM hasta manana jueves 9 de julio a las 3:00 PM hora Colombia.
               </strong>{" "}
               Ingresa y llena tu boleta completa: cuartos de final, semifinales,{" "}
               <strong className="text-white">final, tercer y cuarto puesto, campeon y subcampeon.</strong>{" "}
