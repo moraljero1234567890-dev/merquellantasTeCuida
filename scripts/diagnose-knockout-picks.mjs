@@ -7,13 +7,22 @@
  *
  * Usage:
  *   node scripts/diagnose-knockout-picks.mjs
- *   node scripts/diagnose-knockout-picks.mjs --fix    (writes corrected docs back to DB)
+ *   node scripts/diagnose-knockout-picks.mjs --fix    (100% phantom: null out picks)
+ *   node scripts/diagnose-knockout-picks.mjs --fix-all
+ *       Also fixes high-ratio phantoms (>=8 phantom-looking picks with no
+ *       knockoutPicks entries). Nulls only the exact-matching picks — leaves
+ *       genuinely-wrong picks untouched.
  */
 import { config } from "dotenv";
 config({ path: ".env.local", quiet: true });
 import { MongoClient } from "mongodb";
 
-const FIX_MODE = process.argv.includes("--fix");
+const FIX_MODE = process.argv.includes("--fix") || process.argv.includes("--fix-all");
+const FIX_ALL  = process.argv.includes("--fix-all"); // also fix high-ratio partials
+
+// Minimum phantom-looking picks before a partial-phantom prediction is fixed.
+// 8 exact FT scores across 24 knockout matches is statistically impossible by skill.
+const PHANTOM_COUNT_THRESHOLD = 8;
 
 const uri = process.env.MONGODB_URI;
 const dbName = process.env.MONGODB_DB;
@@ -198,25 +207,41 @@ if (cleanLegacy.length) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Optional fix: null out confirmed phantom picks
+// 4. Optional fix: null out confirmed and high-ratio phantom picks
 // ---------------------------------------------------------------------------
 if (FIX_MODE) {
+  // Candidates: 100%-phantom OR (--fix-all AND >=threshold phantom picks).
+  // Note: predictions with some knockoutPicks entries are still eligible — once the
+  // user has started re-entering, the scoring no longer uses legacy fallback at all,
+  // so leftover phantom legacy picks should still be cleaned up.
+  const toFix = report.filter((r) =>
+    r.allLegacyArePhantom ||
+    (FIX_ALL && r.phantomCount >= PHANTOM_COUNT_THRESHOLD),
+  );
+
+  const label = FIX_ALL ? "FIX-ALL MODE" : "FIX MODE";
   console.log("\n" + "=".repeat(72));
-  console.log("FIX MODE — nulling userPredictedHome/Away/Winner on phantom picks");
+  console.log(`${label} — nulling userPredictedHome/Away/Winner on phantom-looking picks`);
+  if (FIX_ALL) {
+    console.log(`  Threshold: predictions with no knockoutPicks AND >=${PHANTOM_COUNT_THRESHOLD} exact-matching picks`);
+    console.log(`  Only the exact-matching picks are cleared; genuinely-wrong picks are kept.`);
+  }
   console.log("=".repeat(72));
 
   const col = db.collection("polla_predictions");
   let fixed = 0;
 
-  for (const r of suspicious) {
-    // Build updated knockout object with phantom picks cleared
+  for (const r of toFix) {
     const pred = predictions.find((p) => String(p._id) === String(r._id));
     if (!pred) continue;
 
-    const phantomMatchIds = new Set(r.pickRows.filter((pk) => pk.isPhantomCandidate).map((pk) => pk.matchId));
+    // For --fix-all: only null the phantom-looking (exact-match) picks, not the different ones.
+    // For --fix (100% only): all picks are phantom anyway.
+    const phantomMatchIds = new Set(
+      r.pickRows.filter((pk) => pk.isPhantomCandidate).map((pk) => pk.matchId),
+    );
     if (!phantomMatchIds.size) continue;
 
-    // Deep-clone knockout and clear phantom userPredicted* fields
     const knockout = JSON.parse(JSON.stringify(pred.knockout));
     for (const stage of ["r32", "r16", "qf", "sf"]) {
       for (const pick of knockout[stage] ?? []) {
@@ -241,12 +266,12 @@ if (FIX_MODE) {
       { _id: pred._id },
       { $set: { knockout, updatedAt: new Date() } },
     );
-    console.log(`  Fixed: ${r.email} attempt=${r.attempt} (${phantomMatchIds.size} picks cleared)`);
+    console.log(`  Fixed: ${r.email} attempt=${r.attempt} (${phantomMatchIds.size} phantom picks cleared, ${r.diff} different picks kept)`);
     fixed++;
   }
   console.log(`\nDone. Fixed ${fixed} predictions.`);
 } else {
-  console.log("\nRun with --fix to null out phantom picks in the DB.");
+  console.log("\nRun with --fix to null 100%-phantom picks, or --fix-all to also fix high-ratio phantoms.");
 }
 
 await client.close();
