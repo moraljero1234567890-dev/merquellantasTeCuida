@@ -290,6 +290,18 @@ export async function POST(request: NextRequest, ctx: { params: Promise<Params> 
       return NextResponse.json({ error: "Unknown knockout match" }, { status: 404 });
     }
     prediction = { ...prediction, knockout: nextKnockout };
+    // Write the user's explicit score to knockoutPicks — the flat matchId→score
+    // map that scoring.ts uses as the sole source of truth for knockout points.
+    // This is immune to applyActual overwrites and any bracket-recompute bugs.
+    if (home != null && away != null) {
+      prediction = {
+        ...prediction,
+        knockoutPicks: {
+          ...(prediction.knockoutPicks ?? {}),
+          [body.matchId]: { home, away, penaltyWinner },
+        },
+      };
+    }
   } else {
     return NextResponse.json({ error: "Invalid kind" }, { status: 400 });
   }

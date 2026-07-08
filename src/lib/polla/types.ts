@@ -76,12 +76,25 @@ export type KnockoutPick = {
   userPredictedAway?: number | null;
 };
 
+// Explicit knockout scores entered by the user via POST, stored as a flat
+// matchId→score map — identical pattern to groupScores. This is the ONLY
+// authoritative source for scoring knockout picks; the home/away fields inside
+// the KnockoutPick bracket tree are ALWAYS overwritten by applyActual with real
+// results and must never be used for scoring.
+export type KoPickEntry = {
+  home: number;
+  away: number;
+  penaltyWinner: "home" | "away" | null;
+};
+
 export type PredictionDoc = {
   _id: string;
   userEmail: string;
   attempt: number;
   status: "draft" | "complete" | "locked";
   groupScores: Record<string, GroupScore>;
+  // User's explicit knockout score entries (written only by POST, never by applyActual).
+  knockoutPicks?: Record<string, KoPickEntry>;
   knockout: {
     r32: KnockoutPick[];
     r16: KnockoutPick[];

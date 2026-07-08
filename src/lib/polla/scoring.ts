@@ -1,5 +1,5 @@
 import "server-only";
-import type { GroupScore, KnockoutPick, MatchDoc, PredictionDoc } from "./types";
+import type { GroupScore, MatchDoc, PredictionDoc } from "./types";
 import { groupMatchResult } from "./group-points";
 import { buildKnockoutFromGroup, buildR32SeedsFromActual, computeGroupStandings } from "./bracket";
 
@@ -95,15 +95,6 @@ function knockoutFinalResult(matches: MatchDoc[]): {
     };
   }
   return { champion: null, runnerUp: null };
-}
-
-function pickedWinnerCode(p: KnockoutPick): string | null {
-  if (p.home == null || p.away == null) return null;
-  if (p.home > p.away) return p.homeTeamCode;
-  if (p.away > p.home) return p.awayTeamCode;
-  if (p.penaltyWinner === "home") return p.homeTeamCode;
-  if (p.penaltyWinner === "away") return p.awayTeamCode;
-  return null;
 }
 
 function emptyBreakdown(): ScoreBreakdown {
@@ -242,6 +233,13 @@ export function computeLeaderboard(
     // 50 pts for the correct winner or a correctly predicted draw (FT tie),
     // or 0 pts. For draws: the penalty winner is irrelevant — only the FT
     // score matters. Applies to all rounds including the final.
+    //
+    // IMPORTANT: scoring reads ONLY from p.knockoutPicks (the flat matchId→score
+    // map written exclusively by POST). pick.home/away and pick.userPredicted*
+    // inside the bracket tree are NEVER used for scoring because they can contain
+    // real match results (applyActual overwrites them) or corrupt captures from
+    // earlier bugs. A missing knockoutPicks entry means the user never entered
+    // that pick → 0 pts (correct behaviour).
     const allKnockoutPicks = [
       ...ko.r32,
       ...ko.r16,
@@ -258,68 +256,54 @@ export function computeLeaderboard(
 
       const realHome = entry.homeCode === pick.homeTeamCode ? entry.ft.home : entry.ft.away;
       const realAway = entry.homeCode === pick.homeTeamCode ? entry.ft.away : entry.ft.home;
-      // Only accept explicitly typed captures. pick.home/pick.away are ALWAYS the
-      // real match result after applyActual runs — never use them as the user's
-      // score. undefined or null both mean "user never entered a score → 0 pts".
-      const userHome = typeof pick.userPredictedHome === "number" ? pick.userPredictedHome : null;
-      const userAway = typeof pick.userPredictedAway === "number" ? pick.userPredictedAway : null;
-      const hasScore = userHome !== null && userAway !== null;
+      const realIsDraw = realHome === realAway;
 
-      // Exact score (requires both predicted scores)
-      if (hasScore && userHome === realHome && userAway === realAway) {
+      // Read ONLY from the explicit user-entry map — never from bracket fields.
+      const koPick = p.knockoutPicks?.[pick.matchId];
+      if (!koPick || typeof koPick.home !== "number" || typeof koPick.away !== "number") continue;
+      const userHome = koPick.home;
+      const userAway = koPick.away;
+
+      if (userHome === realHome && userAway === realAway) {
         br.knockout.exact += 1;
         br.knockout.points += POINTS.KO_EXACT_WIN;
         continue;
       }
 
-      const realIsDraw = realHome === realAway;
-
-      if (hasScore) {
-        // Full score prediction: award winner/draw points if applicable.
-        const predictedDraw =
-          pick.userPredictedDraw === true
-            ? true
-            : userHome === userAway;
-        if (realIsDraw && predictedDraw) {
-          br.knockout.winner += 1;
-          br.knockout.points += POINTS.KO_WIN;
-        } else if (!realIsDraw && !predictedDraw) {
-          const realWinnerCode = realHome > realAway ? pick.homeTeamCode : pick.awayTeamCode;
-          // Only use an explicitly captured winner — never pickedWinnerCode(pick)
-          // which reads pick.home/away (the real score, not the user's prediction).
-          const upw = typeof pick.userPredictedWinner === "string" ? pick.userPredictedWinner : null;
-          if (upw === realWinnerCode) {
-            br.knockout.winner += 1;
-            br.knockout.points += POINTS.KO_WIN;
-          }
-        }
-      } else if (!realIsDraw && typeof pick.userPredictedWinner === "string") {
-        // No captured score (e.g. user had wrong 3rd-place opponent in this slot)
-        // but an explicit winner was captured — award winner points if correct.
+      const predictedDraw = userHome === userAway;
+      if (realIsDraw && predictedDraw) {
+        br.knockout.winner += 1;
+        br.knockout.points += POINTS.KO_WIN;
+      } else if (!realIsDraw && !predictedDraw) {
         const realWinnerCode = realHome > realAway ? pick.homeTeamCode : pick.awayTeamCode;
-        if (pick.userPredictedWinner === realWinnerCode) {
+        const userWinnerCode = userHome > userAway ? pick.homeTeamCode : pick.awayTeamCode;
+        if (userWinnerCode === realWinnerCode) {
           br.knockout.winner += 1;
           br.knockout.points += POINTS.KO_WIN;
         }
       }
     }
 
-    // Champion / runner-up: only award if the user explicitly captured a winner.
-    // pickedWinnerCode(finalPick) reads pick.home/away which are real scores after
-    // applyActual — never use it here.
+    // Champion / runner-up: derive from the user's explicit final pick entry.
     const finalPick = ko.final;
-    const myChampion =
-      finalPick && typeof finalPick.userPredictedWinner === "string"
-        ? finalPick.userPredictedWinner
-        : null;
-    const myRunnerUp =
-      myChampion && finalPick
-        ? myChampion === finalPick.homeTeamCode
-          ? finalPick.awayTeamCode
-          : myChampion === finalPick.awayTeamCode
-            ? finalPick.homeTeamCode
-            : null
-        : null;
+    const finalKoPick = finalPick ? p.knockoutPicks?.[finalPick.matchId] : undefined;
+    let myChampion: string | null = null;
+    let myRunnerUp: string | null = null;
+    if (finalPick && finalKoPick && typeof finalKoPick.home === "number" && typeof finalKoPick.away === "number") {
+      if (finalKoPick.home > finalKoPick.away) {
+        myChampion = finalPick.homeTeamCode;
+        myRunnerUp = finalPick.awayTeamCode;
+      } else if (finalKoPick.away > finalKoPick.home) {
+        myChampion = finalPick.awayTeamCode;
+        myRunnerUp = finalPick.homeTeamCode;
+      } else if (finalKoPick.penaltyWinner === "home") {
+        myChampion = finalPick.homeTeamCode;
+        myRunnerUp = finalPick.awayTeamCode;
+      } else if (finalKoPick.penaltyWinner === "away") {
+        myChampion = finalPick.awayTeamCode;
+        myRunnerUp = finalPick.homeTeamCode;
+      }
+    }
 
     const gotChampion = !!knockReal.champion && myChampion === knockReal.champion;
     const gotRunnerUp = !!knockReal.runnerUp && !!myRunnerUp && myRunnerUp === knockReal.runnerUp;
