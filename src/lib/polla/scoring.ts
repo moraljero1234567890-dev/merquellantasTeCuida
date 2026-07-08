@@ -258,9 +258,12 @@ export function computeLeaderboard(
 
       const realHome = entry.homeCode === pick.homeTeamCode ? entry.ft.home : entry.ft.away;
       const realAway = entry.homeCode === pick.homeTeamCode ? entry.ft.away : entry.ft.home;
-      const userHome = pick.userPredictedHome !== undefined ? pick.userPredictedHome : pick.home;
-      const userAway = pick.userPredictedAway !== undefined ? pick.userPredictedAway : pick.away;
-      const hasScore = userHome != null && userAway != null;
+      // Only accept explicitly typed captures. pick.home/pick.away are ALWAYS the
+      // real match result after applyActual runs — never use them as the user's
+      // score. undefined or null both mean "user never entered a score → 0 pts".
+      const userHome = typeof pick.userPredictedHome === "number" ? pick.userPredictedHome : null;
+      const userAway = typeof pick.userPredictedAway === "number" ? pick.userPredictedAway : null;
+      const hasScore = userHome !== null && userAway !== null;
 
       // Exact score (requires both predicted scores)
       if (hasScore && userHome === realHome && userAway === realAway) {
@@ -282,15 +285,15 @@ export function computeLeaderboard(
           br.knockout.points += POINTS.KO_WIN;
         } else if (!realIsDraw && !predictedDraw) {
           const realWinnerCode = realHome > realAway ? pick.homeTeamCode : pick.awayTeamCode;
-          const upw = pick.userPredictedWinner !== undefined
-            ? pick.userPredictedWinner
-            : pickedWinnerCode(pick);
+          // Only use an explicitly captured winner — never pickedWinnerCode(pick)
+          // which reads pick.home/away (the real score, not the user's prediction).
+          const upw = typeof pick.userPredictedWinner === "string" ? pick.userPredictedWinner : null;
           if (upw === realWinnerCode) {
             br.knockout.winner += 1;
             br.knockout.points += POINTS.KO_WIN;
           }
         }
-      } else if (!realIsDraw && pick.userPredictedWinner != null) {
+      } else if (!realIsDraw && typeof pick.userPredictedWinner === "string") {
         // No captured score (e.g. user had wrong 3rd-place opponent in this slot)
         // but an explicit winner was captured — award winner points if correct.
         const realWinnerCode = realHome > realAway ? pick.homeTeamCode : pick.awayTeamCode;
@@ -301,14 +304,13 @@ export function computeLeaderboard(
       }
     }
 
-    // Champion / runner-up: use userPredictedWinner on the final pick so scoring
-    // stays correct after the final is played and applyActual overwrites the scores.
+    // Champion / runner-up: only award if the user explicitly captured a winner.
+    // pickedWinnerCode(finalPick) reads pick.home/away which are real scores after
+    // applyActual — never use it here.
     const finalPick = ko.final;
     const myChampion =
-      finalPick
-        ? finalPick.userPredictedWinner !== undefined
-          ? finalPick.userPredictedWinner
-          : pickedWinnerCode(finalPick)
+      finalPick && typeof finalPick.userPredictedWinner === "string"
+        ? finalPick.userPredictedWinner
         : null;
     const myRunnerUp =
       myChampion && finalPick

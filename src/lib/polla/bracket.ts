@@ -466,18 +466,20 @@ export function buildKnockoutFromGroup(
       prev.awayTeamCode === fresh.awayTeamCode
     ) {
       // Full match: preserve the user's scores and captured winner exactly as
-      // stored. null captures mean the user never entered a score for this pick
-      // and must score 0 — never drop them; dropping causes applyActual to
-      // re-capture the real result as the user's prediction (phantom points).
+      // stored. Normalise undefined → null for every userPredicted* field:
+      // undefined means the field was absent from the DB (pre-capture era) and
+      // would make applyActual treat this as a first overwrite, re-capturing the
+      // real result as the user's prediction (phantom points). null correctly
+      // signals "user never entered a score → 0 pts".
       return applyActual({
         ...fresh,
         home: prev.home,
         away: prev.away,
         penaltyWinner: prev.penaltyWinner,
-        userPredictedWinner: prev.userPredictedWinner,
-        userPredictedDraw: prev.userPredictedDraw,
-        userPredictedHome: prev.userPredictedHome,
-        userPredictedAway: prev.userPredictedAway,
+        userPredictedWinner: prev.userPredictedWinner !== undefined ? prev.userPredictedWinner : null,
+        userPredictedDraw: prev.userPredictedDraw !== undefined ? prev.userPredictedDraw : false,
+        userPredictedHome: prev.userPredictedHome !== undefined ? prev.userPredictedHome : null,
+        userPredictedAway: prev.userPredictedAway !== undefined ? prev.userPredictedAway : null,
       });
     }
     if (
@@ -521,23 +523,25 @@ export function buildKnockoutFromGroup(
     const sameTeams =
       prev.homeTeamCode === fresh.homeTeamCode &&
       prev.awayTeamCode === fresh.awayTeamCode;
-    // Preserve the user's captures exactly when teams match. null captures are
-    // the correct state for unfilled picks — never drop them. Dropping null
-    // causes applyActual to re-capture the real result as the user's prediction,
-    // awarding phantom points to users who never entered a score.
+    // Always emit explicit userPredicted* values (never undefined) so applyActual
+    // never treats a preserved pick as a "first overwrite". undefined means the
+    // field was absent from the DB (pre-capture era); normalise to null/false so
+    // the pick scores 0 rather than re-capturing the real result as the user's
+    // prediction. When teams changed (sameTeams=false) we discard the prev
+    // captures entirely — the user's old scores no longer map to the new fixture.
+    const capturedWinner = sameTeams && prev.userPredictedWinner !== undefined ? prev.userPredictedWinner : null;
+    const capturedDraw   = sameTeams && prev.userPredictedDraw   !== undefined ? prev.userPredictedDraw   : false;
+    const capturedHome   = sameTeams && prev.userPredictedHome   !== undefined ? prev.userPredictedHome   : null;
+    const capturedAway   = sameTeams && prev.userPredictedAway   !== undefined ? prev.userPredictedAway   : null;
     return {
       ...fresh,
       home: prev.home,
       away: prev.away,
       penaltyWinner: prev.penaltyWinner,
-      ...(sameTeams
-        ? {
-            userPredictedWinner: prev.userPredictedWinner,
-            userPredictedDraw: prev.userPredictedDraw,
-            userPredictedHome: prev.userPredictedHome,
-            userPredictedAway: prev.userPredictedAway,
-          }
-        : {}),
+      userPredictedWinner: capturedWinner,
+      userPredictedDraw: capturedDraw,
+      userPredictedHome: capturedHome,
+      userPredictedAway: capturedAway,
     };
   }
 
