@@ -109,9 +109,11 @@ export default function PollaHome() {
             <p className="mt-2 text-base font-semibold text-red-100">
               La ventana de edicion esta abierta{" "}
               <strong className="text-white underline decoration-red-200">
-                solo hasta el miercoles 9 de julio a las 3:00 PM hora Colombia.
+                desde hoy martes 8 de julio a las 10:30 AM hasta el miercoles 9 de julio a las 3:00 PM hora Colombia.
               </strong>{" "}
-              Ingresa, actualiza tu boleta con los resultados de octavos y asegurate de pronosticar campeón y subcampeón.
+              Ingresa y llena tu boleta completa: cuartos de final, semifinales,{" "}
+              <strong className="text-white">final, tercer y cuarto puesto, campeon y subcampeon.</strong>{" "}
+              Debes pronosticar todo hasta el partido final — si no completas la llave no acumulas esos puntos.
             </p>
             <div className="mt-3 flex flex-wrap items-center gap-3">
               <a
@@ -121,7 +123,7 @@ export default function PollaHome() {
                 Entrar y editar ahora
               </a>
               <span className="font-mono text-xs uppercase tracking-[0.2em] text-red-200">
-                Cierre: Mier 9 Jul · 3:00 PM COT
+                Apertura: Hoy 8 Jul · 10:30 AM COT · Cierre: Mier 9 Jul · 3:00 PM COT
               </span>
             </div>
           </div>

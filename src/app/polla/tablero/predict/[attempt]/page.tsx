@@ -985,12 +985,18 @@ export default function PollaPredictPage() {
               Esta sera la ultima vez que podras editar tus pronosticos
             </p>
             <p className="mt-2 text-sm font-semibold text-red-100 md:text-base">
-              La ventana de edicion cierra el{" "}
+              Ventana abierta{" "}
               <strong className="text-white">
-                miercoles 9 de julio a las 3:00 PM hora Colombia (COT).
+                desde hoy martes 8 de julio a las 10:30 AM hasta el miercoles 9 de julio a las 3:00 PM hora Colombia (COT).
               </strong>{" "}
-              Despues de ese plazo tu boleta quedara bloqueada definitivamente.
-              Actualiza tus cuartos de final, semifinales, final, tercer puesto, campeon y subcampeon ahora.
+              Despues de ese plazo tu boleta quedara bloqueada definitivamente y no podras hacer ningun cambio.
+            </p>
+            <p className="mt-1.5 text-sm font-semibold text-red-100 md:text-base">
+              Debes llenar tu boleta completa:{" "}
+              <strong className="text-white">
+                cuartos de final, semifinales, final, partido por el tercer y cuarto puesto, campeon y subcampeon.
+              </strong>{" "}
+              Si no completas la llave hasta el final, los partidos sin pronostico no acumulan puntos.
             </p>
             <p className="mt-2 font-mono text-[11px] font-black uppercase tracking-[0.28em] text-red-200">
               No habra mas ventanas de edicion — es tu ultima oportunidad.
