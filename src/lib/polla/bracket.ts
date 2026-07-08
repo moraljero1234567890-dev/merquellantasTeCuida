@@ -465,24 +465,19 @@ export function buildKnockoutFromGroup(
       prev.homeTeamCode === fresh.homeTeamCode &&
       prev.awayTeamCode === fresh.awayTeamCode
     ) {
-      // Full match: preserve user's score and captured winner.
-      // Recovery: when the score captures are null (lost by an earlier bug) but
-      // prev.home has a value (written by applyActual), drop the null captures so
-      // applyActual re-derives them from prev.home/away on the next pass.
-      // When prev.home is also null the user never entered a pick, so keep null
-      // to correctly score 0 pts.
-      const forceRecapture = prev.userPredictedHome === null && prev.home != null;
+      // Full match: preserve the user's scores and captured winner exactly as
+      // stored. null captures mean the user never entered a score for this pick
+      // and must score 0 — never drop them; dropping causes applyActual to
+      // re-capture the real result as the user's prediction (phantom points).
       return applyActual({
         ...fresh,
         home: prev.home,
         away: prev.away,
         penaltyWinner: prev.penaltyWinner,
-        ...(forceRecapture ? {} : {
-          userPredictedWinner: prev.userPredictedWinner,
-          userPredictedDraw: prev.userPredictedDraw,
-          userPredictedHome: prev.userPredictedHome,
-          userPredictedAway: prev.userPredictedAway,
-        }),
+        userPredictedWinner: prev.userPredictedWinner,
+        userPredictedDraw: prev.userPredictedDraw,
+        userPredictedHome: prev.userPredictedHome,
+        userPredictedAway: prev.userPredictedAway,
       });
     }
     if (
@@ -526,17 +521,16 @@ export function buildKnockoutFromGroup(
     const sameTeams =
       prev.homeTeamCode === fresh.homeTeamCode &&
       prev.awayTeamCode === fresh.awayTeamCode;
-    // Recovery: same as the R32 full-match branch — when score captures were lost
-    // (null) but prev.home has a value, drop the null captures so applyActual
-    // re-derives them from prev.home/away. Skip when prev.home is also null
-    // (user never entered a pick — don't award phantom points).
-    const forceRecapture = sameTeams && prev.userPredictedHome === null && prev.home != null;
+    // Preserve the user's captures exactly when teams match. null captures are
+    // the correct state for unfilled picks — never drop them. Dropping null
+    // causes applyActual to re-capture the real result as the user's prediction,
+    // awarding phantom points to users who never entered a score.
     return {
       ...fresh,
       home: prev.home,
       away: prev.away,
       penaltyWinner: prev.penaltyWinner,
-      ...(sameTeams && !forceRecapture
+      ...(sameTeams
         ? {
             userPredictedWinner: prev.userPredictedWinner,
             userPredictedDraw: prev.userPredictedDraw,
