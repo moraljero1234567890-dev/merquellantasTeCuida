@@ -19,7 +19,6 @@ export async function GET() {
       'Content-Disposition': 'inline; filename="reglamento-interno.pdf"',
       'Cache-Control': 'no-store, no-cache, must-revalidate',
       'X-Content-Type-Options': 'nosniff',
-      'Content-Security-Policy': "default-src 'none'",
     },
   });
 }
