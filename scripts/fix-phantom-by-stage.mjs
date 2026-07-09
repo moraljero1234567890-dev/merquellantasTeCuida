@@ -27,8 +27,8 @@ import { MongoClient } from "mongodb";
 const WRITE_MODE = process.argv.includes("--write");
 
 const STAGE_THRESHOLDS = {
-  ROUND_OF_32: 10,
-  ROUND_OF_16: 5,
+  ROUND_OF_32: 7,   // ≥7/16 (44%+) exact picks in this stage → phantom
+  ROUND_OF_16: 4,   // ≥4/8  (50%+) exact picks in this stage → phantom
   QUARTER_FINALS: 3,
   SEMI_FINALS: 2,
 };
