@@ -8,7 +8,7 @@ import { staticFallback, type ApiMatch } from "@/lib/polla/matches";
 import { usePollaAuth } from "@/lib/polla/use-polla-auth";
 import { displayTeam, normalizeTeam } from "@/lib/polla/team-display";
 import { groupMatchResult, type GroupTier } from "@/lib/polla/group-points";
-import type { KnockoutPick, KoPickEntry, PredictionDoc } from "@/lib/polla/types";
+import type { KnockoutPick, PredictionDoc } from "@/lib/polla/types";
 
 const MERQUE_LOGO =
   "https://www.merquellantas.com/assets/images/logo/Logo-Merquellantas.png";
@@ -50,41 +50,45 @@ function actualWinnerCode(m: MatchWithScore): string | null {
   return null;
 }
 
-// Resolve the user's effective knockout pick for a given match. Priority:
-// 1. knockoutPicks[matchId] (written only by explicit POST — immune to corruption)
-// 2. userPredictedHome/Away (legacy) when no explicit entry for THIS match AND user
-//    has group picks. Per-match fallback so users who re-entered some picks during
-//    the editing window still show their legacy R32/R16 predictions.
-// 3. null → user never entered this pick
-function resolveKoPick(
-  prediction: PredictionDoc,
-  pick: KnockoutPick,
-  userHasGroupPicks: boolean,
-): KoPickEntry | null {
-  const explicit = prediction.knockoutPicks?.[pick.matchId];
-  if (explicit && typeof explicit.home === "number" && typeof explicit.away === "number") {
-    return explicit;
-  }
-  if (
-    userHasGroupPicks &&
-    typeof pick.userPredictedHome === "number" &&
-    typeof pick.userPredictedAway === "number"
-  ) {
-    return {
-      home: pick.userPredictedHome,
-      away: pick.userPredictedAway,
-      penaltyWinner: pick.penaltyWinner ?? null,
-    };
-  }
+// Winning team code among the user's predicted teams for a pick, or null.
+function predictedWinnerCode(p: KnockoutPick): string | null {
+  if (p.home == null || p.away == null) return null;
+  if (p.home > p.away) return p.homeTeamCode;
+  if (p.away > p.home) return p.awayTeamCode;
+  if (p.penaltyWinner === "home") return p.homeTeamCode;
+  if (p.penaltyWinner === "away") return p.awayTeamCode;
   return null;
 }
 
-function koPickWinner(kp: KoPickEntry, pick: KnockoutPick): string | null {
-  if (kp.home > kp.away) return pick.homeTeamCode;
-  if (kp.away > kp.home) return pick.awayTeamCode;
-  if (kp.penaltyWinner === "home") return pick.homeTeamCode;
-  if (kp.penaltyWinner === "away") return pick.awayTeamCode;
-  return null;
+// User's original predicted winner: captured before applyActual overwrote scores.
+// Falls back to predictedWinnerCode for picks not yet overwritten (match still live).
+function userPickedWinner(p: KnockoutPick): string | null {
+  if (p.userPredictedWinner !== undefined) return p.userPredictedWinner;
+  return predictedWinnerCode(p);
+}
+
+// True if the user predicted a draw (equal FT scores → went to penalties).
+// Priority: explicit captured flag > captured home/away > current stored home/away.
+// The last fallback uses pick.home/away which may be the real score (overwritten), but
+// it's also what's displayed to the user — so it's the most consistent approximation
+// for pre-deploy picks where the original prediction wasn't captured.
+function userPredictedDrawPick(p: KnockoutPick): boolean {
+  if (p.userPredictedDraw === true) return true;
+  if (p.userPredictedHome != null && p.userPredictedAway != null) {
+    return p.userPredictedHome === p.userPredictedAway;
+  }
+  return p.home != null && p.away != null && p.home === p.away;
+}
+
+// User's originally predicted FT score (captured before applyActual).
+// Uses != null (matches both null and undefined) so that pre-deploy picks where
+// userPredictedHome was captured as null still fall back to pick.home/away —
+// better to show the real score than "—" when the original prediction is gone.
+function userPredictedScore(p: KnockoutPick): { home: number; away: number } | null {
+  const h = (p.userPredictedHome != null) ? p.userPredictedHome : p.home;
+  const a = (p.userPredictedAway != null) ? p.userPredictedAway : p.away;
+  if (h == null || a == null) return null;
+  return { home: h, away: a };
 }
 
 const KO_EXACT_WIN = 100;
@@ -93,13 +97,13 @@ const KO_CHAMPION = 300;
 const KO_RUNNER_UP = 250;
 const KO_CHAMPION_AND_RUNNER_UP = 350;
 
-// Returns "exact" when the user's resolved pick matches the real FT score exactly.
+// Returns "exact" when the user's predicted FT score matches the real FT score
+// (for draws: exact tie score, penalty winner irrelevant), null otherwise.
 function koScoreTierForPick(
-  koPick: KoPickEntry | null,
   pick: KnockoutPick,
   realMatches: MatchWithScore[],
 ): "exact" | null {
-  if (!koPick || !pick.homeTeamCode || !pick.awayTeamCode) return null;
+  if (!pick.homeTeamCode || !pick.awayTeamCode) return null;
   const real = realMatches.find(
     (m) =>
       m.stage === pick.stage &&
@@ -111,7 +115,16 @@ function koScoreTierForPick(
   const ft = real.score.fullTime;
   const realHome = real.home.code === pick.homeTeamCode ? ft.home : ft.away;
   const realAway = real.home.code === pick.homeTeamCode ? ft.away : ft.home;
-  return (koPick.home === realHome && koPick.away === realAway) ? "exact" : null;
+  // Use strict null check so pre-deploy picks (userPredictedHome explicitly null)
+  // don't fall back to pick.home (real score) and earn a free exact bonus.
+  const userHome = (pick.userPredictedHome != null) ? pick.userPredictedHome
+    : (pick.userPredictedHome === undefined) ? pick.home
+    : null;
+  const userAway = (pick.userPredictedAway != null) ? pick.userPredictedAway
+    : (pick.userPredictedAway === undefined) ? pick.away
+    : null;
+  if (userHome == null || userAway == null) return null;
+  return (userHome === realHome && userAway === realAway) ? "exact" : null;
 }
 
 function MiniMatch({
@@ -163,26 +176,31 @@ function MiniMatch({
 }
 
 // One of the user's predicted knockout matches.
-// `koPick`: resolved user score (null = user never entered this pick).
 // `advanced`: true = the team they backed won its real match, false = lost, null = not played yet.
 // `pts`: total points earned for this pick (null = result not yet known).
 // `scoreTier`: "exact" when the user's predicted FT matched exactly (100 pts).
 function PredictedMatchCard({
   pick,
-  koPick,
   advanced,
   pts,
   scoreTier,
 }: {
   pick: KnockoutPick;
-  koPick: KoPickEntry | null;
   advanced: boolean | null;
   pts: number | null;
   scoreTier?: "exact" | null;
 }) {
   const h = displayTeam(pick.homeTeamCode, pick.homeTeamName);
   const a = displayTeam(pick.awayTeamCode, pick.awayTeamName);
-  const pred = koPick ? { home: koPick.home, away: koPick.away } : null;
+  // Use userPickedWinner so the winner label reflects the original prediction
+  // even after applyActual overwrote the pick scores with real results.
+  const pickedCode = userPickedWinner(pick);
+  const winnerName =
+    pickedCode === pick.homeTeamCode ? h.name
+    : pickedCode === pick.awayTeamCode ? a.name
+    : null;
+  // Show the user's originally-predicted score (before applyActual overwrote it).
+  const pred = userPredictedScore(pick);
   return (
     <li
       className={`border p-3 ${
@@ -198,7 +216,7 @@ function PredictedMatchCard({
         a={a}
         home={pred?.home ?? null}
         away={pred?.away ?? null}
-        pen={koPick != null && koPick.home === koPick.away && !!koPick.penaltyWinner}
+        pen={userPredictedDrawPick(pick) && !!pick.penaltyWinner}
       />
       <div className="mt-2 flex items-center justify-end gap-2">
         <div className="flex items-center gap-1.5">
@@ -435,39 +453,37 @@ export default function PollaResultsPage() {
 
   // Did the team the user backed to win this pick actually advance from that
   // round? true = won its real match, false = lost it, null = not yet decided.
+  // Tie rule: if the user predicted a draw AND the real match was also a FT
+  // draw (went to penalties), count as correct regardless of penalty winner.
   const advancedForPick = (pick: KnockoutPick): boolean | null => {
-    if (!prediction) return null;
     const oc = stageOutcome.get(pick.stage);
     if (!oc) return null;
-    const koPick = resolveKoPick(prediction, pick, userHasGroupPicks);
-    if (!koPick) return null;
 
-    if (koPick.home === koPick.away && pick.homeTeamCode && pick.awayTeamCode) {
-      // User predicted a draw — check if real match was also a FT draw.
-      const realMatchForPair = matches.find(
-        (m) =>
-          m.stage === pick.stage &&
-          m.status === "FINISHED" &&
-          ((m.home.code === pick.homeTeamCode && m.away.code === pick.awayTeamCode) ||
-            (m.home.code === pick.awayTeamCode && m.away.code === pick.homeTeamCode)),
-      );
+    // Check if user predicted a draw and the real match was also a draw.
+    if (userPredictedDrawPick(pick) && pick.homeTeamCode && pick.awayTeamCode) {
+      const realMatchForPair = (() => {
+        for (const m of matches) {
+          if (m.stage !== pick.stage || m.status !== "FINISHED") continue;
+          if (
+            (m.home.code === pick.homeTeamCode && m.away.code === pick.awayTeamCode) ||
+            (m.home.code === pick.awayTeamCode && m.away.code === pick.homeTeamCode)
+          ) return m;
+        }
+        return null;
+      })();
       if (realMatchForPair?.score?.fullTime) {
         const ft = realMatchForPair.score.fullTime;
-        return ft.home === ft.away;
+        if (ft.home === ft.away) return true; // both predicted + real FT draw
+        return false; // user said draw but real FT had a winner
       }
     }
 
-    const w = koPickWinner(koPick, pick);
+    const w = userPickedWinner(pick);
     if (!w) return null;
     if (oc.winners.has(w)) return true;
     if (oc.losers.has(w)) return false;
     return null;
   };
-
-  const userHasGroupPicks = useMemo(
-    () => !!prediction && Object.keys(prediction.groupScores).length > 0,
-    [prediction],
-  );
 
   // Flat knockout scoring: 100 pts for exact FT score, 50 pts for correct winner
   // or correctly predicted draw, 0 otherwise. Applies to all rounds r32..final.
@@ -503,25 +519,37 @@ export default function PollaResultsPage() {
 
       const realHome = entry.homeCode === pick.homeTeamCode ? entry.ft.home : entry.ft.away;
       const realAway = entry.homeCode === pick.homeTeamCode ? entry.ft.away : entry.ft.home;
-      const realIsDraw = realHome === realAway;
+      // Use !== undefined (not != null) so explicitly-null captures (empty picks
+      // overwritten by applyActual) are treated as "no prediction" and skip scoring.
+      const userHome = pick.userPredictedHome !== undefined ? pick.userPredictedHome : pick.home;
+      const userAway = pick.userPredictedAway !== undefined ? pick.userPredictedAway : pick.away;
+      const hasScore = userHome != null && userAway != null;
 
-      const koPick = resolveKoPick(prediction, pick, userHasGroupPicks);
-      if (!koPick) continue;
-
-      if (koPick.home === realHome && koPick.away === realAway) {
+      if (hasScore && userHome === realHome && userAway === realAway) {
         result.exact += 1;
         result.total += KO_EXACT_WIN;
         continue;
       }
 
-      const predictedDraw = koPick.home === koPick.away;
-      if (realIsDraw && predictedDraw) {
-        result.winner += 1;
-        result.total += KO_WIN;
-      } else if (!realIsDraw && !predictedDraw) {
+      const realIsDraw = realHome === realAway;
+      if (hasScore) {
+        const predictedDraw = userHome === userAway;
+        if (realIsDraw && predictedDraw) {
+          result.winner += 1;
+          result.total += KO_WIN;
+        } else if (!realIsDraw && !predictedDraw) {
+          const realWinnerCode = realHome > realAway ? pick.homeTeamCode : pick.awayTeamCode;
+          const userWinnerCode = userHome > userAway ? pick.homeTeamCode : pick.awayTeamCode;
+          if (userWinnerCode === realWinnerCode) {
+            result.winner += 1;
+            result.total += KO_WIN;
+          }
+        }
+      } else if (!realIsDraw && pick.userPredictedWinner != null) {
+        // No captured score (e.g. user had wrong 3rd-place opponent in this slot)
+        // but explicit winner captured — award winner points if correct.
         const realWinnerCode = realHome > realAway ? pick.homeTeamCode : pick.awayTeamCode;
-        const userWinnerCode = koPick.home > koPick.away ? pick.homeTeamCode : pick.awayTeamCode;
-        if (userWinnerCode === realWinnerCode) {
+        if (pick.userPredictedWinner === realWinnerCode) {
           result.winner += 1;
           result.total += KO_WIN;
         }
@@ -540,8 +568,7 @@ export default function PollaResultsPage() {
     }
 
     const finalPick = prediction.knockout.final;
-    const finalKoPick = finalPick ? resolveKoPick(prediction, finalPick, userHasGroupPicks) : null;
-    const myChampion = finalKoPick ? koPickWinner(finalKoPick, finalPick!) : null;
+    const myChampion = finalPick ? userPickedWinner(finalPick) : null;
     const myRunnerUp = myChampion && finalPick
       ? myChampion === finalPick.homeTeamCode ? finalPick.awayTeamCode
         : myChampion === finalPick.awayTeamCode ? finalPick.homeTeamCode : null
@@ -558,7 +585,7 @@ export default function PollaResultsPage() {
     }
 
     return result;
-  }, [matches, prediction, userHasGroupPicks]);
+  }, [matches, prediction]);
 
   // Champion / runner-up display info (separate from scoring).
   const champ = useMemo(() => {
@@ -586,11 +613,10 @@ export default function PollaResultsPage() {
           ? realFinal.home.code
           : null;
 
+    // Use userPickedWinner for the final pick so the display shows the user's
+    // ORIGINAL prediction even after applyActual overwrote the pick with real scores.
     const myFinal = prediction?.knockout.final ?? null;
-    const myFinalKoPick = (myFinal && prediction)
-      ? resolveKoPick(prediction, myFinal, Object.keys(prediction.groupScores).length > 0)
-      : null;
-    const myChampionCode = myFinalKoPick ? koPickWinner(myFinalKoPick, myFinal!) : null;
+    const myChampionCode = myFinal ? userPickedWinner(myFinal) : (prediction?.champion?.code ?? null);
     const myRunnerUpCode = myChampionCode && myFinal
       ? myChampionCode === myFinal.homeTeamCode ? myFinal.awayTeamCode
         : myChampionCode === myFinal.awayTeamCode ? myFinal.homeTeamCode : null
@@ -830,20 +856,29 @@ export default function PollaResultsPage() {
                         ((m.home.code === pick.homeTeamCode && m.away.code === pick.awayTeamCode) ||
                          (m.home.code === pick.awayTeamCode && m.away.code === pick.homeTeamCode)),
                     );
-                    if (!real) return null;
+                    if (!real) return null; // not yet finished or no FT score
                     const ft = real.score!.fullTime!;
                     const realHome = real.home.code === pick.homeTeamCode ? ft.home : ft.away;
                     const realAway = real.home.code === pick.homeTeamCode ? ft.away : ft.home;
-                    const koPick = resolveKoPick(prediction!, pick, userHasGroupPicks);
-                    if (!koPick) return 0;
-                    if (koPick.home === realHome && koPick.away === realAway) return KO_EXACT_WIN;
+                    // Use !== undefined (not != null) so explicitly-null captures
+                    // (empty picks overwritten by applyActual) are treated as no prediction.
+                    const userHome = pick.userPredictedHome !== undefined ? pick.userPredictedHome : pick.home;
+                    const userAway = pick.userPredictedAway !== undefined ? pick.userPredictedAway : pick.away;
+                    const hasScore = userHome != null && userAway != null;
+                    if (hasScore && userHome === realHome && userAway === realAway) return KO_EXACT_WIN;
                     const realIsDraw = realHome === realAway;
-                    const predictedDraw = koPick.home === koPick.away;
-                    if (realIsDraw && predictedDraw) return KO_WIN;
-                    if (!realIsDraw && !predictedDraw) {
+                    if (hasScore) {
+                      const predictedDraw = userHome === userAway;
+                      if (realIsDraw && predictedDraw) return KO_WIN;
+                      if (!realIsDraw && !predictedDraw) {
+                        const realWinnerCode = realHome > realAway ? pick.homeTeamCode : pick.awayTeamCode;
+                        const userWinnerCode = userHome > userAway ? pick.homeTeamCode : pick.awayTeamCode;
+                        if (userWinnerCode === realWinnerCode) return KO_WIN;
+                      }
+                      return 0;
+                    } else if (!realIsDraw && pick.userPredictedWinner != null) {
                       const realWinnerCode = realHome > realAway ? pick.homeTeamCode : pick.awayTeamCode;
-                      const userWinnerCode = koPick.home > koPick.away ? pick.homeTeamCode : pick.awayTeamCode;
-                      if (userWinnerCode === realWinnerCode) return KO_WIN;
+                      if (pick.userPredictedWinner === realWinnerCode) return KO_WIN;
                     }
                     return 0;
                   };
@@ -868,16 +903,14 @@ export default function PollaResultsPage() {
                             const pairKey = [p.homeTeamCode, p.awayTeamCode].sort().join("|");
                             const realMatch = realByTeamPair.get(pairKey) ?? null;
                             if (realMatch) matchedRealIds.add(realMatch._id);
-                            const koPick = resolveKoPick(prediction!, p, userHasGroupPicks);
                             return (
                               <div key={p.matchId} className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                                 <ul>
                                   <PredictedMatchCard
                                     pick={p}
-                                    koPick={koPick}
                                     advanced={advancedForPick(p)}
                                     pts={ptsForPick(p)}
-                                    scoreTier={koScoreTierForPick(koPick, p, matches)}
+                                    scoreTier={koScoreTierForPick(p, matches)}
                                   />
                                 </ul>
                                 <ul>
@@ -928,9 +961,8 @@ export default function PollaResultsPage() {
                       if (!p) return null;
                       const stage = key === "third" ? "THIRD_PLACE" : "FINAL";
                       const real = realByStage.get(stage) ?? [];
-                      const koPick = resolveKoPick(prediction, p, userHasGroupPicks);
-                      const scoreTier = koScoreTierForPick(koPick, p, matches);
                       // Points for third-place pick only; final pts shown in champion/runner-up block below.
+                      const scoreTier = koScoreTierForPick(p, matches);
                       const pts: number | null = key === "final" ? null : (() => {
                         if (!p.homeTeamCode || !p.awayTeamCode) return null;
                         const real = matches.find(
@@ -940,18 +972,26 @@ export default function PollaResultsPage() {
                              (m.home.code === p.awayTeamCode && m.away.code === p.homeTeamCode)),
                         );
                         if (!real) return null;
-                        if (!koPick) return 0;
                         const ft = real.score!.fullTime!;
                         const realHome = real.home.code === p.homeTeamCode ? ft.home : ft.away;
                         const realAway = real.home.code === p.homeTeamCode ? ft.away : ft.home;
-                        if (koPick.home === realHome && koPick.away === realAway) return KO_EXACT_WIN;
+                        const userHome = p.userPredictedHome !== undefined ? p.userPredictedHome : p.home;
+                        const userAway = p.userPredictedAway !== undefined ? p.userPredictedAway : p.away;
+                        const hasScore = userHome != null && userAway != null;
+                        if (hasScore && userHome === realHome && userAway === realAway) return KO_EXACT_WIN;
                         const realIsDraw = realHome === realAway;
-                        const predictedDraw = koPick.home === koPick.away;
-                        if (realIsDraw && predictedDraw) return KO_WIN;
-                        if (!realIsDraw && !predictedDraw) {
+                        if (hasScore) {
+                          const predictedDraw = userHome === userAway;
+                          if (realIsDraw && predictedDraw) return KO_WIN;
+                          if (!realIsDraw && !predictedDraw) {
+                            const realWinnerCode = realHome > realAway ? p.homeTeamCode : p.awayTeamCode;
+                            const userWinnerCode = userHome > userAway ? p.homeTeamCode : p.awayTeamCode;
+                            if (userWinnerCode === realWinnerCode) return KO_WIN;
+                          }
+                          return 0;
+                        } else if (!realIsDraw && p.userPredictedWinner != null) {
                           const realWinnerCode = realHome > realAway ? p.homeTeamCode : p.awayTeamCode;
-                          const userWinnerCode = koPick.home > koPick.away ? p.homeTeamCode : p.awayTeamCode;
-                          if (userWinnerCode === realWinnerCode) return KO_WIN;
+                          if (p.userPredictedWinner === realWinnerCode) return KO_WIN;
                         }
                         return 0;
                       })();
@@ -968,7 +1008,6 @@ export default function PollaResultsPage() {
                             <ul>
                               <PredictedMatchCard
                                 pick={p}
-                                koPick={koPick}
                                 advanced={advancedForPick(p)}
                                 pts={pts}
                                 scoreTier={scoreTier}

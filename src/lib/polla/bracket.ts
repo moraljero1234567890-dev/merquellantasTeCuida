@@ -465,21 +465,24 @@ export function buildKnockoutFromGroup(
       prev.homeTeamCode === fresh.homeTeamCode &&
       prev.awayTeamCode === fresh.awayTeamCode
     ) {
-      // Full match: preserve the user's scores and captured winner exactly as
-      // stored. Normalise undefined → null for every userPredicted* field:
-      // undefined means the field was absent from the DB (pre-capture era) and
-      // would make applyActual treat this as a first overwrite, re-capturing the
-      // real result as the user's prediction (phantom points). null correctly
-      // signals "user never entered a score → 0 pts".
+      // Full match: preserve user's score and captured winner.
+      // Recovery: when the score captures are null (lost by an earlier bug) but
+      // prev.home has a value (written by applyActual), drop the null captures so
+      // applyActual re-derives them from prev.home/away on the next pass.
+      // When prev.home is also null the user never entered a pick, so keep null
+      // to correctly score 0 pts.
+      const forceRecapture = prev.userPredictedHome === null && prev.home != null;
       return applyActual({
         ...fresh,
         home: prev.home,
         away: prev.away,
         penaltyWinner: prev.penaltyWinner,
-        userPredictedWinner: prev.userPredictedWinner !== undefined ? prev.userPredictedWinner : null,
-        userPredictedDraw: prev.userPredictedDraw !== undefined ? prev.userPredictedDraw : false,
-        userPredictedHome: prev.userPredictedHome !== undefined ? prev.userPredictedHome : null,
-        userPredictedAway: prev.userPredictedAway !== undefined ? prev.userPredictedAway : null,
+        ...(forceRecapture ? {} : {
+          userPredictedWinner: prev.userPredictedWinner,
+          userPredictedDraw: prev.userPredictedDraw,
+          userPredictedHome: prev.userPredictedHome,
+          userPredictedAway: prev.userPredictedAway,
+        }),
       });
     }
     if (
@@ -523,25 +526,24 @@ export function buildKnockoutFromGroup(
     const sameTeams =
       prev.homeTeamCode === fresh.homeTeamCode &&
       prev.awayTeamCode === fresh.awayTeamCode;
-    // Always emit explicit userPredicted* values (never undefined) so applyActual
-    // never treats a preserved pick as a "first overwrite". undefined means the
-    // field was absent from the DB (pre-capture era); normalise to null/false so
-    // the pick scores 0 rather than re-capturing the real result as the user's
-    // prediction. When teams changed (sameTeams=false) we discard the prev
-    // captures entirely — the user's old scores no longer map to the new fixture.
-    const capturedWinner = sameTeams && prev.userPredictedWinner !== undefined ? prev.userPredictedWinner : null;
-    const capturedDraw   = sameTeams && prev.userPredictedDraw   !== undefined ? prev.userPredictedDraw   : false;
-    const capturedHome   = sameTeams && prev.userPredictedHome   !== undefined ? prev.userPredictedHome   : null;
-    const capturedAway   = sameTeams && prev.userPredictedAway   !== undefined ? prev.userPredictedAway   : null;
+    // Recovery: same as the R32 full-match branch — when score captures were lost
+    // (null) but prev.home has a value, drop the null captures so applyActual
+    // re-derives them from prev.home/away. Skip when prev.home is also null
+    // (user never entered a pick — don't award phantom points).
+    const forceRecapture = sameTeams && prev.userPredictedHome === null && prev.home != null;
     return {
       ...fresh,
       home: prev.home,
       away: prev.away,
       penaltyWinner: prev.penaltyWinner,
-      userPredictedWinner: capturedWinner,
-      userPredictedDraw: capturedDraw,
-      userPredictedHome: capturedHome,
-      userPredictedAway: capturedAway,
+      ...(sameTeams && !forceRecapture
+        ? {
+            userPredictedWinner: prev.userPredictedWinner,
+            userPredictedDraw: prev.userPredictedDraw,
+            userPredictedHome: prev.userPredictedHome,
+            userPredictedAway: prev.userPredictedAway,
+          }
+        : {}),
     };
   }
 

@@ -1,5 +1,5 @@
 import "server-only";
-import type { GroupScore, MatchDoc, PredictionDoc } from "./types";
+import type { GroupScore, KnockoutPick, MatchDoc, PredictionDoc } from "./types";
 import { groupMatchResult } from "./group-points";
 import { buildKnockoutFromGroup, buildR32SeedsFromActual, computeGroupStandings } from "./bracket";
 
@@ -95,6 +95,15 @@ function knockoutFinalResult(matches: MatchDoc[]): {
     };
   }
   return { champion: null, runnerUp: null };
+}
+
+function pickedWinnerCode(p: KnockoutPick): string | null {
+  if (p.home == null || p.away == null) return null;
+  if (p.home > p.away) return p.homeTeamCode;
+  if (p.away > p.home) return p.awayTeamCode;
+  if (p.penaltyWinner === "home") return p.homeTeamCode;
+  if (p.penaltyWinner === "away") return p.awayTeamCode;
+  return null;
 }
 
 function emptyBreakdown(): ScoreBreakdown {
@@ -233,13 +242,6 @@ export function computeLeaderboard(
     // 50 pts for the correct winner or a correctly predicted draw (FT tie),
     // or 0 pts. For draws: the penalty winner is irrelevant — only the FT
     // score matters. Applies to all rounds including the final.
-    //
-    // IMPORTANT: scoring reads ONLY from p.knockoutPicks (the flat matchId→score
-    // map written exclusively by POST). pick.home/away and pick.userPredicted*
-    // inside the bracket tree are NEVER used for scoring because they can contain
-    // real match results (applyActual overwrites them) or corrupt captures from
-    // earlier bugs. A missing knockoutPicks entry means the user never entered
-    // that pick → 0 pts (correct behaviour).
     const allKnockoutPicks = [
       ...ko.r32,
       ...ko.r16,
@@ -248,11 +250,6 @@ export function computeLeaderboard(
       ...(ko.third ? [ko.third] : []),
       ...(ko.final ? [ko.final] : []),
     ];
-    // Whether this user ever filled group predictions. Empty-groupScores users
-    // are ones who never engaged — their stored userPredicted* fields are likely
-    // phantom captures from earlier bugs and must be ignored for scoring.
-    const userHasGroupPicks = Object.keys(p.groupScores).length > 0;
-
     for (const pick of allKnockoutPicks) {
       if (!pick.homeTeamCode || !pick.awayTeamCode) continue;
       const key = `${pick.stage}|${[pick.homeTeamCode, pick.awayTeamCode].sort().join("|")}`;
@@ -261,68 +258,66 @@ export function computeLeaderboard(
 
       const realHome = entry.homeCode === pick.homeTeamCode ? entry.ft.home : entry.ft.away;
       const realAway = entry.homeCode === pick.homeTeamCode ? entry.ft.away : entry.ft.home;
-      const realIsDraw = realHome === realAway;
+      const userHome = pick.userPredictedHome !== undefined ? pick.userPredictedHome : pick.home;
+      const userAway = pick.userPredictedAway !== undefined ? pick.userPredictedAway : pick.away;
+      const hasScore = userHome != null && userAway != null;
 
-      // Score priority per match:
-      // 1. knockoutPicks[matchId] — written only by explicit POST, immune to applyActual corruption
-      // 2. userPredictedHome/Away (legacy) — only when no explicit entry for THIS match AND user
-      //    has group picks (proves engagement). Per-match fallback so that users who re-entered
-      //    some picks during the editing window still score on their legacy R32/R16 predictions
-      //    (those matches were locked before the window opened and have no knockoutPicks entry).
-      // 3. null → 0 pts
-      const koPick = p.knockoutPicks?.[pick.matchId];
-      let userHome: number | null = null;
-      let userAway: number | null = null;
-      if (koPick && typeof koPick.home === "number" && typeof koPick.away === "number") {
-        userHome = koPick.home;
-        userAway = koPick.away;
-      } else if (userHasGroupPicks && typeof pick.userPredictedHome === "number" && typeof pick.userPredictedAway === "number") {
-        userHome = pick.userPredictedHome;
-        userAway = pick.userPredictedAway;
-      }
-      if (userHome === null || userAway === null) continue;
-
-      if (userHome === realHome && userAway === realAway) {
+      // Exact score (requires both predicted scores)
+      if (hasScore && userHome === realHome && userAway === realAway) {
         br.knockout.exact += 1;
         br.knockout.points += POINTS.KO_EXACT_WIN;
         continue;
       }
 
-      const predictedDraw = userHome === userAway;
-      if (realIsDraw && predictedDraw) {
-        br.knockout.winner += 1;
-        br.knockout.points += POINTS.KO_WIN;
-      } else if (!realIsDraw && !predictedDraw) {
+      const realIsDraw = realHome === realAway;
+
+      if (hasScore) {
+        // Full score prediction: award winner/draw points if applicable.
+        const predictedDraw =
+          pick.userPredictedDraw === true
+            ? true
+            : userHome === userAway;
+        if (realIsDraw && predictedDraw) {
+          br.knockout.winner += 1;
+          br.knockout.points += POINTS.KO_WIN;
+        } else if (!realIsDraw && !predictedDraw) {
+          const realWinnerCode = realHome > realAway ? pick.homeTeamCode : pick.awayTeamCode;
+          const upw = pick.userPredictedWinner !== undefined
+            ? pick.userPredictedWinner
+            : pickedWinnerCode(pick);
+          if (upw === realWinnerCode) {
+            br.knockout.winner += 1;
+            br.knockout.points += POINTS.KO_WIN;
+          }
+        }
+      } else if (!realIsDraw && pick.userPredictedWinner != null) {
+        // No captured score (e.g. user had wrong 3rd-place opponent in this slot)
+        // but an explicit winner was captured — award winner points if correct.
         const realWinnerCode = realHome > realAway ? pick.homeTeamCode : pick.awayTeamCode;
-        const userWinnerCode = userHome > userAway ? pick.homeTeamCode : pick.awayTeamCode;
-        if (userWinnerCode === realWinnerCode) {
+        if (pick.userPredictedWinner === realWinnerCode) {
           br.knockout.winner += 1;
           br.knockout.points += POINTS.KO_WIN;
         }
       }
     }
 
-    // Champion / runner-up. Same priority: knockoutPicks first, then legacy
-    // userPredictedWinner (gated on having group picks).
+    // Champion / runner-up: use userPredictedWinner on the final pick so scoring
+    // stays correct after the final is played and applyActual overwrites the scores.
     const finalPick = ko.final;
-    const finalKoPick = finalPick ? p.knockoutPicks?.[finalPick.matchId] : undefined;
-    let myChampion: string | null = null;
-    let myRunnerUp: string | null = null;
-    if (finalPick && finalKoPick && typeof finalKoPick.home === "number" && typeof finalKoPick.away === "number") {
-      if (finalKoPick.home > finalKoPick.away) {
-        myChampion = finalPick.homeTeamCode; myRunnerUp = finalPick.awayTeamCode;
-      } else if (finalKoPick.away > finalKoPick.home) {
-        myChampion = finalPick.awayTeamCode; myRunnerUp = finalPick.homeTeamCode;
-      } else if (finalKoPick.penaltyWinner === "home") {
-        myChampion = finalPick.homeTeamCode; myRunnerUp = finalPick.awayTeamCode;
-      } else if (finalKoPick.penaltyWinner === "away") {
-        myChampion = finalPick.awayTeamCode; myRunnerUp = finalPick.homeTeamCode;
-      }
-    } else if (finalPick && !finalKoPick && userHasGroupPicks && typeof finalPick.userPredictedWinner === "string") {
-      myChampion = finalPick.userPredictedWinner;
-      myRunnerUp = myChampion === finalPick.homeTeamCode ? finalPick.awayTeamCode
-        : myChampion === finalPick.awayTeamCode ? finalPick.homeTeamCode : null;
-    }
+    const myChampion =
+      finalPick
+        ? finalPick.userPredictedWinner !== undefined
+          ? finalPick.userPredictedWinner
+          : pickedWinnerCode(finalPick)
+        : null;
+    const myRunnerUp =
+      myChampion && finalPick
+        ? myChampion === finalPick.homeTeamCode
+          ? finalPick.awayTeamCode
+          : myChampion === finalPick.awayTeamCode
+            ? finalPick.homeTeamCode
+            : null
+        : null;
 
     const gotChampion = !!knockReal.champion && myChampion === knockReal.champion;
     const gotRunnerUp = !!knockReal.runnerUp && !!myRunnerUp && myRunnerUp === knockReal.runnerUp;
