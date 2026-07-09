@@ -252,11 +252,6 @@ export function computeLeaderboard(
     // are ones who never engaged — their stored userPredicted* fields are likely
     // phantom captures from earlier bugs and must be ignored for scoring.
     const userHasGroupPicks = Object.keys(p.groupScores).length > 0;
-    // Once a prediction has ANY knockoutPicks entry the user has started re-entering
-    // picks via the current editing window. At that point the legacy fallback is
-    // disabled entirely — only explicit knockoutPicks entries count. This prevents
-    // phantom legacy R32/R16 data from still scoring alongside new QF/SF entries.
-    const hasAnyKnockoutPicks = Object.keys(p.knockoutPicks ?? {}).length > 0;
 
     for (const pick of allKnockoutPicks) {
       if (!pick.homeTeamCode || !pick.awayTeamCode) continue;
@@ -268,12 +263,12 @@ export function computeLeaderboard(
       const realAway = entry.homeCode === pick.homeTeamCode ? entry.ft.away : entry.ft.home;
       const realIsDraw = realHome === realAway;
 
-      // Score priority:
-      // 1. knockoutPicks entry (written only by POST — immune to applyActual corruption)
-      // 2. userPredictedHome/Away (old format) ONLY IF:
-      //    a. user has group picks (proves engagement — not a never-filled account), AND
-      //    b. prediction has NO knockoutPicks entries yet (once they start re-entering,
-      //       all scoring must come from knockoutPicks to prevent phantom R32/R16 mixing)
+      // Score priority per match:
+      // 1. knockoutPicks[matchId] — written only by explicit POST, immune to applyActual corruption
+      // 2. userPredictedHome/Away (legacy) — only when no explicit entry for THIS match AND user
+      //    has group picks (proves engagement). Per-match fallback so that users who re-entered
+      //    some picks during the editing window still score on their legacy R32/R16 predictions
+      //    (those matches were locked before the window opened and have no knockoutPicks entry).
       // 3. null → 0 pts
       const koPick = p.knockoutPicks?.[pick.matchId];
       let userHome: number | null = null;
@@ -281,7 +276,7 @@ export function computeLeaderboard(
       if (koPick && typeof koPick.home === "number" && typeof koPick.away === "number") {
         userHome = koPick.home;
         userAway = koPick.away;
-      } else if (!hasAnyKnockoutPicks && userHasGroupPicks && typeof pick.userPredictedHome === "number" && typeof pick.userPredictedAway === "number") {
+      } else if (userHasGroupPicks && typeof pick.userPredictedHome === "number" && typeof pick.userPredictedAway === "number") {
         userHome = pick.userPredictedHome;
         userAway = pick.userPredictedAway;
       }
@@ -323,7 +318,7 @@ export function computeLeaderboard(
       } else if (finalKoPick.penaltyWinner === "away") {
         myChampion = finalPick.awayTeamCode; myRunnerUp = finalPick.homeTeamCode;
       }
-    } else if (finalPick && !hasAnyKnockoutPicks && userHasGroupPicks && typeof finalPick.userPredictedWinner === "string") {
+    } else if (finalPick && !finalKoPick && userHasGroupPicks && typeof finalPick.userPredictedWinner === "string") {
       myChampion = finalPick.userPredictedWinner;
       myRunnerUp = myChampion === finalPick.homeTeamCode ? finalPick.awayTeamCode
         : myChampion === finalPick.awayTeamCode ? finalPick.homeTeamCode : null;

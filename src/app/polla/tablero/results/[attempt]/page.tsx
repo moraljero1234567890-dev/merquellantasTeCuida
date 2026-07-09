@@ -51,11 +51,10 @@ function actualWinnerCode(m: MatchWithScore): string | null {
 }
 
 // Resolve the user's effective knockout pick for a given match. Priority:
-// 1. knockoutPicks entry (written only by explicit POST — immune to corruption)
-// 2. userPredictedHome/Away (legacy) ONLY when:
-//    a. user has group picks (proves engagement), AND
-//    b. prediction has NO knockoutPicks at all yet — once they start re-entering,
-//       all picks must come from knockoutPicks to prevent phantom R32/R16 mixing
+// 1. knockoutPicks[matchId] (written only by explicit POST — immune to corruption)
+// 2. userPredictedHome/Away (legacy) when no explicit entry for THIS match AND user
+//    has group picks. Per-match fallback so users who re-entered some picks during
+//    the editing window still show their legacy R32/R16 predictions.
 // 3. null → user never entered this pick
 function resolveKoPick(
   prediction: PredictionDoc,
@@ -66,9 +65,7 @@ function resolveKoPick(
   if (explicit && typeof explicit.home === "number" && typeof explicit.away === "number") {
     return explicit;
   }
-  const hasAnyKnockoutPicks = Object.keys(prediction.knockoutPicks ?? {}).length > 0;
   if (
-    !hasAnyKnockoutPicks &&
     userHasGroupPicks &&
     typeof pick.userPredictedHome === "number" &&
     typeof pick.userPredictedAway === "number"
