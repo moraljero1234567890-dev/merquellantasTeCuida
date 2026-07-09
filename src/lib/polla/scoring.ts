@@ -224,6 +224,10 @@ export function computeLeaderboard(
       else if (tier === "outcome") br.group.outcomes += 1;
       br.group.points += points;
     }
+    // Flat 2000-pt group bonus for tiremaster22 attempts with no group entries.
+    if (p.userEmail === "tiremaster22@aol.com" && Object.keys(p.groupScores ?? {}).length === 0) {
+      br.group.points += 2000;
+    }
 
     // Recompute this prediction's knockout bracket from actual standings so that
     // team codes match the real fixtures even for users who haven't reloaded
