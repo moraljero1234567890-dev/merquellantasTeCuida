@@ -1,10 +1,13 @@
 "use client";
 
 import { useEffect } from 'react';
+import dynamic from 'next/dynamic';
 import DashboardNavbar from '../navbar';
 import { ShieldAlert } from 'lucide-react';
 import { useSession } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
+
+const PDFViewer = dynamic(() => import('./PDFViewer'), { ssr: false });
 
 export default function RITPage() {
   const { status } = useSession();
@@ -58,15 +61,11 @@ export default function RITPage() {
         </div>
 
         <div
-          className="relative w-full rounded-2xl overflow-hidden shadow-lg border border-gray-200"
+          className="relative w-full rounded-2xl overflow-y-auto shadow-lg border border-gray-200 bg-gray-100"
           style={{ height: 'calc(100vh - 160px)' }}
           onContextMenu={e => e.preventDefault()}
         >
-          <iframe
-            src="/api/rit"
-            className="w-full h-full"
-            title="Reglamento Interno de Trabajo 2026"
-          />
+          <PDFViewer url="/api/rit" />
         </div>
 
         <p className="mt-3 text-[11px] text-gray-400 text-center">
