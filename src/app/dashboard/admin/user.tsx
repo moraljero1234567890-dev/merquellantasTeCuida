@@ -738,6 +738,14 @@ const Users: React.FC = () => {
                         onChange={e => setFormData(prev => ({ ...prev, cedula: e.target.value.replace(/\D/g, '') }))}
                         className="w-full px-3 py-2.5 bg-gray-50 border border-gray-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-[#f4a900] focus:border-transparent focus:bg-white transition"
                       />
+                      {formData.cedula && (
+                        <p className="mt-1 text-[11px] text-gray-500">
+                          Contraseña inicial:{' '}
+                          <code className="font-mono font-semibold text-gray-700">
+                            {formData.cedula.slice(-8).padStart(8, '0')}
+                          </code>
+                        </p>
+                      )}
                     </Field>
                     <Field label="Tipo de documento">
                       <select

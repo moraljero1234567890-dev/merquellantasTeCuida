@@ -292,7 +292,7 @@ export async function POST(req: NextRequest) {
     try {
       const existing = await usersCol.findOne({ cedula }, { projection: { _id: 1, passwordHash: 1 } });
       const passwordHash =
-        existing?.passwordHash || (await bcrypt.hash(cedula.slice(-8), 10));
+        existing?.passwordHash || (await bcrypt.hash(cedula.slice(-8).padStart(8, '0'), 10));
       userDoc.passwordHash = passwordHash;
 
       const updateRes = await usersCol.updateOne(

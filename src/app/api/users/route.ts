@@ -52,7 +52,7 @@ export async function POST(req: NextRequest) {
     const db = await getDb();
     const cedula = String(body.cedula);
     const email = body.email || `${cedula}@merque.com`;
-    const password = cedula.slice(-8);
+    const password = cedula.slice(-8).padStart(8, '0');
     const passwordHash = await bcrypt.hash(password, 10);
     const safeRol = VALID_ROLES.has(body.rol) ? body.rol : 'user';
 

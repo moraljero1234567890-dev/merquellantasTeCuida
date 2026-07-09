@@ -30,8 +30,8 @@ export async function POST(req: NextRequest) {
 
     const db = await getDb();
 
-    // Password = last 8 digits of cedula
-    const passwordHash = await bcrypt.hash(String(cedula).slice(-8), 10);
+    // Password = last 8 digits of cedula, zero-padded to 8 chars for short cédulas
+    const passwordHash = await bcrypt.hash(String(cedula).slice(-8).padStart(8, '0'), 10);
 
     const userDoc = {
       cedula: String(cedula),

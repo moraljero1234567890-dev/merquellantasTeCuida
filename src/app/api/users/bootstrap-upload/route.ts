@@ -258,7 +258,7 @@ export async function POST(req: NextRequest) {
     };
 
     try {
-      const passwordHash = await bcrypt.hash(cedula.slice(-8), 10);
+      const passwordHash = await bcrypt.hash(cedula.slice(-8).padStart(8, '0'), 10);
       userDoc.passwordHash = passwordHash;
 
       const updateRes = await usersCol.updateOne(
