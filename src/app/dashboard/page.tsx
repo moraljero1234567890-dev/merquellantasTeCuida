@@ -11,6 +11,7 @@ import {
   LayoutDashboard,
   UserCircle2,
   X,
+  BookOpen,
 } from 'lucide-react';
 import Solicitudes from "./components/solicitudes";
 import AdminPage from './admin/page';
@@ -1326,6 +1327,27 @@ useEffect(() => {
                         })}
                       </div>
                     )}
+                  </div>
+                </div>
+
+                {/* RIT — Reglamento Interno de Trabajo */}
+                <div className="bg-white rounded-2xl shadow-sm p-5 border border-gray-100 hover:shadow-md transition-shadow duration-300 relative overflow-hidden">
+                  <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-[#f4a900] to-[#ffb347]" />
+                  <div className="flex items-center gap-4">
+                    <div className="w-12 h-12 rounded-xl bg-[#f4a900]/10 flex items-center justify-center flex-shrink-0">
+                      <BookOpen className="h-6 w-6 text-[#f4a900]" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <h2 className="font-bold text-gray-900 text-sm">Reglamento Interno de Trabajo</h2>
+                      <p className="text-xs text-gray-500 mt-0.5">Consulta el RIT 2026 de Merquellantas</p>
+                    </div>
+                    <a
+                      href="/dashboard/rit"
+                      className="flex-shrink-0 inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-[#f4a900] text-white text-xs font-bold hover:bg-[#e68a00] active:scale-95 transition-all shadow-sm"
+                    >
+                      Ver RIT
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    </a>
                   </div>
                 </div>
 
