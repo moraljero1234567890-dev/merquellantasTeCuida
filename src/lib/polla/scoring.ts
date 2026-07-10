@@ -254,8 +254,11 @@ export function computeLeaderboard(
 
       const realHome = entry.homeCode === pick.homeTeamCode ? entry.ft.home : entry.ft.away;
       const realAway = entry.homeCode === pick.homeTeamCode ? entry.ft.away : entry.ft.home;
-      const userHome = pick.userPredictedHome !== undefined ? pick.userPredictedHome : pick.home;
-      const userAway = pick.userPredictedAway !== undefined ? pick.userPredictedAway : pick.away;
+      // For R32: never fall back to pick.home — only score what the user explicitly stored.
+      // For all other rounds the pick.home fallback is still valid (real score not yet captured).
+      const isR32 = pick.stage === "ROUND_OF_32";
+      const userHome = pick.userPredictedHome !== undefined ? pick.userPredictedHome : (isR32 ? null : pick.home);
+      const userAway = pick.userPredictedAway !== undefined ? pick.userPredictedAway : (isR32 ? null : pick.away);
       const hasScore = userHome != null && userAway != null;
 
       // Exact score (requires both predicted scores)
