@@ -254,11 +254,9 @@ export function computeLeaderboard(
 
       const realHome = entry.homeCode === pick.homeTeamCode ? entry.ft.home : entry.ft.away;
       const realAway = entry.homeCode === pick.homeTeamCode ? entry.ft.away : entry.ft.home;
-      // For R32/R16: never fall back to pick.home — only score what the user explicitly stored.
-      // For later rounds the pick.home fallback is still valid (real score not yet captured).
-      const isLegacyRound = pick.stage === "ROUND_OF_32" || pick.stage === "ROUND_OF_16";
-      const userHome = pick.userPredictedHome !== undefined ? pick.userPredictedHome : (isLegacyRound ? null : pick.home);
-      const userAway = pick.userPredictedAway !== undefined ? pick.userPredictedAway : (isLegacyRound ? null : pick.away);
+      // Never fall back to pick.home — only score what the user explicitly stored.
+      const userHome = pick.userPredictedHome !== undefined ? pick.userPredictedHome : null;
+      const userAway = pick.userPredictedAway !== undefined ? pick.userPredictedAway : null;
       const hasScore = userHome != null && userAway != null;
 
       // Exact score (requires both predicted scores)
@@ -289,11 +287,14 @@ export function computeLeaderboard(
             br.knockout.points += POINTS.KO_WIN;
           }
         }
-      } else if (!realIsDraw && pick.userPredictedWinner != null) {
-        // No captured score (e.g. user had wrong 3rd-place opponent in this slot)
-        // but an explicit winner was captured — award winner points if correct.
-        const realWinnerCode = realHome > realAway ? pick.homeTeamCode : pick.awayTeamCode;
-        if (pick.userPredictedWinner === realWinnerCode) {
+      } else if (pick.userPredictedWinner != null) {
+        // No captured score but an explicit winner was stored — award 50 pts if correct.
+        // Use actualByPair so penalty shootout winners are resolved correctly (e.g. 0-0 FT).
+        const pairKey = [pick.homeTeamCode, pick.awayTeamCode].sort().join("|");
+        const realWinnerCode =
+          actualByPair.get(pairKey)?.winnerCode ??
+          (realHome > realAway ? pick.homeTeamCode : realHome < realAway ? pick.awayTeamCode : null);
+        if (realWinnerCode && pick.userPredictedWinner === realWinnerCode) {
           br.knockout.winner += 1;
           br.knockout.points += POINTS.KO_WIN;
         }
