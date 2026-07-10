@@ -258,8 +258,9 @@ export function computeLeaderboard(
       const userAway = pick.userPredictedAway !== undefined ? pick.userPredictedAway : pick.away;
       const hasScore = userHome != null && userAway != null;
 
-      // Exact score (requires both predicted scores)
-      if (hasScore && userHome === realHome && userAway === realAway) {
+      // Exact score (requires both predicted scores).
+      // R32 excluded: phantom bug corrupted all R32 exact picks — cap at winner credit (50 pts).
+      if (hasScore && userHome === realHome && userAway === realAway && pick.stage !== "ROUND_OF_32") {
         br.knockout.exact += 1;
         br.knockout.points += POINTS.KO_EXACT_WIN;
         continue;
