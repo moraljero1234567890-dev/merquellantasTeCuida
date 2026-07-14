@@ -167,8 +167,6 @@ export async function GET(request: NextRequest, ctx: { params: Promise<Params> }
   if (lockStatus.useActualStandings) {
     try {
       prediction = await recomputeKnockout(prediction, true);
-      prediction.updatedAt = new Date();
-      await upsertPrediction(prediction);
     } catch (err) {
       console.error("recomputeKnockout failed (returning raw prediction):", err);
     }
