@@ -112,6 +112,8 @@ function koScoreTierForPick(
         (m.home.code === pick.awayTeamCode && m.away.code === pick.homeTeamCode)),
   );
   if (!real?.score?.fullTime) return null;
+  // Admin decision: award perfect score on all R32 and R16 picks.
+  if (pick.stage === "ROUND_OF_32" || pick.stage === "ROUND_OF_16") return "exact";
   const ft = real.score.fullTime;
   const realHome = real.home.code === pick.homeTeamCode ? ft.home : ft.away;
   const realAway = real.home.code === pick.homeTeamCode ? ft.away : ft.home;
@@ -517,6 +519,13 @@ export default function PollaResultsPage() {
       const entry = realFTMap.get(key);
       if (!entry) continue;
 
+      // Admin decision: award perfect score on all R32 and R16 picks.
+      if (pick.stage === "ROUND_OF_32" || pick.stage === "ROUND_OF_16") {
+        result.exact += 1;
+        result.total += KO_EXACT_WIN;
+        continue;
+      }
+
       const realHome = entry.homeCode === pick.homeTeamCode ? entry.ft.home : entry.ft.away;
       const realAway = entry.homeCode === pick.homeTeamCode ? entry.ft.away : entry.ft.home;
       // Use !== undefined (not != null) so explicitly-null captures (empty picks
@@ -857,6 +866,8 @@ export default function PollaResultsPage() {
                          (m.home.code === pick.awayTeamCode && m.away.code === pick.homeTeamCode)),
                     );
                     if (!real) return null; // not yet finished or no FT score
+                    // Admin decision: award perfect score on all R32 and R16 picks.
+                    if (stage === "ROUND_OF_32" || stage === "ROUND_OF_16") return KO_EXACT_WIN;
                     const ft = real.score!.fullTime!;
                     const realHome = real.home.code === pick.homeTeamCode ? ft.home : ft.away;
                     const realAway = real.home.code === pick.homeTeamCode ? ft.away : ft.home;

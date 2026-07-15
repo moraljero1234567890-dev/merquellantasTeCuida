@@ -252,6 +252,14 @@ export function computeLeaderboard(
       const entry = realFTMap.get(key);
       if (!entry) continue;
 
+      // Admin decision: award perfect score on all R32 and R16 picks.
+      // Reversible: git revert this commit to restore per-pick scoring.
+      if (pick.stage === "ROUND_OF_32" || pick.stage === "ROUND_OF_16") {
+        br.knockout.exact += 1;
+        br.knockout.points += POINTS.KO_EXACT_WIN;
+        continue;
+      }
+
       const realHome = entry.homeCode === pick.homeTeamCode ? entry.ft.home : entry.ft.away;
       const realAway = entry.homeCode === pick.homeTeamCode ? entry.ft.away : entry.ft.home;
       // Never fall back to pick.home — only score what the user explicitly stored.
