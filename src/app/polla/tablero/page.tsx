@@ -29,6 +29,8 @@ export default function PollaDashboardPage() {
   const { session, logout } = usePollaAuth();
   const [effectiveTotal, setEffectiveTotal] = useState<number | null>(null);
   const [attempts, setAttempts] = useState<AttemptSummary[]>([]);
+  const [realChampion, setRealChampion] = useState<{ code: string; name: string } | null>(null);
+  const [realRunnerUp, setRealRunnerUp] = useState<{ code: string; name: string } | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [showGift, setShowGift] = useState(false);
@@ -52,6 +54,8 @@ export default function PollaDashboardPage() {
         if (data.user?.attemptsAllowed != null) {
           setEffectiveTotal(data.user.attemptsAllowed);
         }
+        if (data.realChampion) setRealChampion(data.realChampion);
+        if (data.realRunnerUp) setRealRunnerUp(data.realRunnerUp);
         setError(null);
       })
       .catch(() => {
@@ -255,14 +259,26 @@ export default function PollaDashboardPage() {
                                 ? "Pronóstico en progreso"
                                 : "Pronóstico sin iniciar"}
                         </p>
-                        {row.champion && (
-                          <p className="mt-1 text-sm text-[var(--foreground-soft)]">
-                            Tu campeón:{" "}
-                            <span className="font-semibold text-[var(--foreground)]">
-                              {row.champion.name}
-                            </span>
-                          </p>
-                        )}
+                        {row.champion && (() => {
+                          const isChamp = realChampion && row.champion.code === realChampion.code;
+                          const isRunner = !isChamp && realRunnerUp && row.champion.code === realRunnerUp.code;
+                          return (
+                            <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-[var(--foreground-soft)]">
+                              <span>Tu campeón inicial:</span>
+                              <span className="font-semibold text-[var(--foreground)]">{row.champion.name}</span>
+                              {isChamp && (
+                                <span className="rounded-sm bg-emerald-600 px-1.5 py-0.5 font-mono text-[9px] font-black uppercase tracking-[0.15em] text-white">
+                                  Campeón ✓ +350
+                                </span>
+                              )}
+                              {isRunner && (
+                                <span className="rounded-sm bg-amber-500 px-1.5 py-0.5 font-mono text-[9px] font-black uppercase tracking-[0.15em] text-white">
+                                  Subcampeón ✓ +250
+                                </span>
+                              )}
+                            </p>
+                          );
+                        })()}
                         {!row.champion && row.groupCount > 0 && (
                           <p className="mt-1 text-sm text-[var(--foreground-soft)]">
                             {row.groupCount} partidos de grupos llenados
@@ -283,6 +299,9 @@ export default function PollaDashboardPage() {
                             <span className="mt-1 font-mono text-[10px] text-[var(--foreground-muted)]">
                               {row.breakdown.group.points} grupos ·{" "}
                               {row.breakdown.knockout.points} elim.
+                              {(row.breakdown.bonus ?? 0) > 0 && (
+                                <span className="text-emerald-700"> · +{row.breakdown.bonus} bonus</span>
+                              )}
                             </span>
                           )}
                         </div>

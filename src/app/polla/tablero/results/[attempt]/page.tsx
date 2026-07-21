@@ -595,11 +595,14 @@ export default function PollaResultsPage() {
       result.runnerUp = 1; result.total += KO_RUNNER_UP;
     }
 
-    // Initial champion bonus: awarded when the user's champion pick at submission
-    // (initialChampionCode, the DB value before any recompute) matches the real champion.
+    // Initial champion/runner-up bonus: awarded when the user's stored champion pick
+    // matches the real champion (350) or the real runner-up (250).
     if (realChampion && initialChampionCode && initialChampionCode === realChampion) {
-      result.initialChampionBonus = KO_CHAMPION_AND_RUNNER_UP;
+      result.initialChampionBonus = KO_CHAMPION_AND_RUNNER_UP; // 350
       result.total += KO_CHAMPION_AND_RUNNER_UP;
+    } else if (realRunnerUp && initialChampionCode && initialChampionCode === realRunnerUp) {
+      result.initialChampionBonus = KO_RUNNER_UP; // 250
+      result.total += KO_RUNNER_UP;
     }
 
     return result;
@@ -647,11 +650,22 @@ export default function PollaResultsPage() {
       myRunnerUpCode != null &&
       myRunnerUpCode === actualRunnerUpCode;
 
-    // Initial champion bonus: check the user's original DB champion pick
+    // Initial champion/runner-up bonus: check the user's original DB champion pick
+    const actualRunnerUpCode2 =
+      realFinal && actualChampionCode === realFinal.home.code
+        ? realFinal.away.code
+        : realFinal && actualChampionCode === realFinal.away.code
+          ? realFinal.home.code
+          : null;
     const initialChampionBonus =
       actualChampionCode != null &&
       initialChampionCode != null &&
       initialChampionCode === actualChampionCode;
+    const initialRunnerUpBonus =
+      !initialChampionBonus &&
+      actualRunnerUpCode2 != null &&
+      initialChampionCode != null &&
+      initialChampionCode === actualRunnerUpCode2;
     // Name of the initial champion for display
     const initialChampionName =
       initialChampionCode && realFinal
@@ -671,6 +685,7 @@ export default function PollaResultsPage() {
       myChampionCode,
       myRunnerUpCode,
       initialChampionBonus,
+      initialRunnerUpBonus,
       initialChampionName,
       actualChampionCode,
     };
@@ -855,7 +870,8 @@ export default function PollaResultsPage() {
                 {knockoutPts.winner > 0 && <span>Quién avanza: <strong>{knockoutPts.winner}×50</strong></span>}
                 {knockoutPts.champion > 0 && <span>Campeón: <strong>+{knockoutPts.runnerUp ? "350 (ambos)" : "300"}</strong></span>}
                 {knockoutPts.runnerUp > 0 && !knockoutPts.champion && <span>Subcampeón: <strong>+250</strong></span>}
-                {knockoutPts.initialChampionBonus > 0 && <span className="text-emerald-700 font-semibold">Bonus campeón inicial: <strong>+350</strong></span>}
+                {knockoutPts.initialChampionBonus === KO_CHAMPION_AND_RUNNER_UP && <span className="text-emerald-700 font-semibold">Bonus campeón inicial: <strong>+350</strong></span>}
+                {knockoutPts.initialChampionBonus === KO_RUNNER_UP && <span className="text-amber-600 font-semibold">Bonus subcampeón inicial: <strong>+250</strong></span>}
               </div>
               <p className="mt-2 text-sm text-[var(--foreground-muted)]">
                 Marcador exacto (FT) <strong>100 pts</strong> · Solo quién avanza <strong>50 pts</strong> · Error 0 pts.
@@ -1141,30 +1157,33 @@ export default function PollaResultsPage() {
                   </div>
                 )}
 
-                {/* Initial champion bonus card */}
+                {/* Initial champion / runner-up bonus card */}
                 {initialChampionCode && champ.decided && (
                   <div
                     className={`border-l-4 p-8 ${
                       champ.initialChampionBonus
                         ? "border-emerald-600 bg-emerald-50"
-                        : "border-[var(--line)] bg-white"
+                        : champ.initialRunnerUpBonus
+                          ? "border-amber-500 bg-amber-50"
+                          : "border-[var(--line)] bg-white"
                     }`}
                   >
                     <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-[var(--foreground-muted)]">
-                      Bonus · Campeón inicial
+                      Bonus · Pronóstico inicial de campeón
                     </p>
                     <p className="mt-1 text-[10px] text-[var(--foreground-muted)]">
-                      Tu pronóstico original de campeón al inicio del torneo
+                      El equipo que elegiste campeón cuando completaste tu boleta
                     </p>
                     <p className="mt-3 text-4xl font-black uppercase tracking-tight">
                       {champ.initialChampionName ?? displayTeam(initialChampionCode, initialChampionCode).name}
                     </p>
                     <p className="mt-3 font-mono text-xs font-bold uppercase tracking-[0.2em]">
-                      Real: {champ.actualChampion?.name ?? "—"}{" "}
                       {champ.initialChampionBonus ? (
-                        <span className="text-emerald-700">✓ +350 pts bonus</span>
+                        <>Campeón real: {champ.actualChampion?.name ?? "—"} <span className="text-emerald-700">✓ +350 pts bonus</span></>
+                      ) : champ.initialRunnerUpBonus ? (
+                        <>Subcampeón real: {champ.actualRunnerUpTeam?.name ?? "—"} <span className="text-amber-600">✓ +250 pts bonus</span></>
                       ) : (
-                        <span className="text-red-600">✗</span>
+                        <>Real: {champ.actualChampion?.name ?? "—"} <span className="text-red-600">✗</span></>
                       )}
                     </p>
                   </div>
