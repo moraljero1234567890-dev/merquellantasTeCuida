@@ -36,6 +36,7 @@ type LeaderboardRow = {
       champion: number;
       points: number;
     };
+    bonus: number;
     total: number;
   };
 };
@@ -566,6 +567,7 @@ export default function PollaAdminPage() {
                     <th className="py-2 pr-3">Intento</th>
                     <th className="py-2 pr-3 text-right">Grupos</th>
                     <th className="py-2 pr-3 text-right">Elim.</th>
+                    <th className="py-2 pr-3 text-right">Bonus</th>
                     <th className="py-2 pr-3 text-right">Total</th>
                   </tr>
                 </thead>
@@ -608,6 +610,15 @@ export default function PollaAdminPage() {
                             {row.breakdown.knockout.runnerUp ? " ·sub" : ""}
                           </div>
                         </td>
+                        <td className="py-3 pr-3 text-right">
+                          {row.breakdown.bonus > 0 ? (
+                            <div className="font-mono font-bold tabular-nums text-emerald-700">
+                              +{row.breakdown.bonus}
+                            </div>
+                          ) : (
+                            <div className="font-mono text-[var(--foreground-muted)]">—</div>
+                          )}
+                        </td>
                         <td className="py-3 pr-3 text-right font-mono text-lg font-black tabular-nums">
                           {row.breakdown.total}
                         </td>
@@ -617,7 +628,7 @@ export default function PollaAdminPage() {
                 </tbody>
               </table>
               <p className="mt-3 font-mono text-[10px] uppercase tracking-[0.22em] text-[var(--foreground-muted)]">
-                Grupos (acumulan): ex = exacto (100), dif = diferencia de gol (50), res = solo resultado (30) · Elim: exacto FT = 100, avance = 50, error = 0 · Camp = campeón (300), Sub = subcampeón (250), ambos = 350
+                Grupos (acumulan): ex = exacto (100), dif = diferencia de gol (50), res = solo resultado (30) · Elim: exacto FT = 100, avance = 50, error = 0 · Camp = campeón (300), Sub = subcampeón (250), ambos = 350 · Bonus = 350 si acertó el campeón inicial
               </p>
             </div>
           )}

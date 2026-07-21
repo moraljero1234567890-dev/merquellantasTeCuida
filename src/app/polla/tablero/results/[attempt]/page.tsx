@@ -324,6 +324,7 @@ export default function PollaResultsPage() {
   const { session, logout } = usePollaAuth();
   const [matches, setMatches] = useState<MatchWithScore[]>([]);
   const [prediction, setPrediction] = useState<PredictionDoc | null>(null);
+  const [initialChampionCode, setInitialChampionCode] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -345,6 +346,7 @@ export default function PollaResultsPage() {
         setMatches(arr.length ? arr : staticFallback());
         if (p?.prediction) {
           setPrediction(p.prediction);
+          setInitialChampionCode(p.initialChampionCode ?? null);
           setError(null);
         } else {
           setPrediction(null);
@@ -490,7 +492,7 @@ export default function PollaResultsPage() {
   // Flat knockout scoring: 100 pts for exact FT score, 50 pts for correct winner
   // or correctly predicted draw, 0 otherwise. Applies to all rounds r32..final.
   const knockoutPts = useMemo(() => {
-    const result = { exact: 0, winner: 0, champion: 0, runnerUp: 0, total: 0 };
+    const result = { exact: 0, winner: 0, champion: 0, runnerUp: 0, initialChampionBonus: 0, total: 0 };
     if (!prediction) return result;
 
     // Build a map of real FT scores keyed by "stage|sortedTeamCodes".
@@ -593,8 +595,15 @@ export default function PollaResultsPage() {
       result.runnerUp = 1; result.total += KO_RUNNER_UP;
     }
 
+    // Initial champion bonus: awarded when the user's champion pick at submission
+    // (initialChampionCode, the DB value before any recompute) matches the real champion.
+    if (realChampion && initialChampionCode && initialChampionCode === realChampion) {
+      result.initialChampionBonus = KO_CHAMPION_AND_RUNNER_UP;
+      result.total += KO_CHAMPION_AND_RUNNER_UP;
+    }
+
     return result;
-  }, [matches, prediction]);
+  }, [matches, prediction, initialChampionCode]);
 
   // Champion / runner-up display info (separate from scoring).
   const champ = useMemo(() => {
@@ -638,6 +647,21 @@ export default function PollaResultsPage() {
       myRunnerUpCode != null &&
       myRunnerUpCode === actualRunnerUpCode;
 
+    // Initial champion bonus: check the user's original DB champion pick
+    const initialChampionBonus =
+      actualChampionCode != null &&
+      initialChampionCode != null &&
+      initialChampionCode === actualChampionCode;
+    // Name of the initial champion for display
+    const initialChampionName =
+      initialChampionCode && realFinal
+        ? initialChampionCode === realFinal.home.code ? normalizeTeam(realFinal.home).name
+          : initialChampionCode === realFinal.away.code ? normalizeTeam(realFinal.away).name
+          : displayTeam(initialChampionCode, initialChampionCode).name
+        : initialChampionCode
+          ? displayTeam(initialChampionCode, initialChampionCode).name
+          : null;
+
     return {
       decided: !!actualChampionCode,
       actualChampion,
@@ -646,8 +670,11 @@ export default function PollaResultsPage() {
       runnerUpCorrect,
       myChampionCode,
       myRunnerUpCode,
+      initialChampionBonus,
+      initialChampionName,
+      actualChampionCode,
     };
-  }, [realKnockoutById, prediction]);
+  }, [realKnockoutById, prediction, initialChampionCode]);
 
   const handleLogout = logout;
 
@@ -828,6 +855,7 @@ export default function PollaResultsPage() {
                 {knockoutPts.winner > 0 && <span>Quién avanza: <strong>{knockoutPts.winner}×50</strong></span>}
                 {knockoutPts.champion > 0 && <span>Campeón: <strong>+{knockoutPts.runnerUp ? "350 (ambos)" : "300"}</strong></span>}
                 {knockoutPts.runnerUp > 0 && !knockoutPts.champion && <span>Subcampeón: <strong>+250</strong></span>}
+                {knockoutPts.initialChampionBonus > 0 && <span className="text-emerald-700 font-semibold">Bonus campeón inicial: <strong>+350</strong></span>}
               </div>
               <p className="mt-2 text-sm text-[var(--foreground-muted)]">
                 Marcador exacto (FT) <strong>100 pts</strong> · Solo quién avanza <strong>50 pts</strong> · Error 0 pts.
@@ -1110,6 +1138,35 @@ export default function PollaResultsPage() {
                         )}
                       </div>
                     )}
+                  </div>
+                )}
+
+                {/* Initial champion bonus card */}
+                {initialChampionCode && champ.decided && (
+                  <div
+                    className={`border-l-4 p-8 ${
+                      champ.initialChampionBonus
+                        ? "border-emerald-600 bg-emerald-50"
+                        : "border-[var(--line)] bg-white"
+                    }`}
+                  >
+                    <p className="font-mono text-[11px] uppercase tracking-[0.3em] text-[var(--foreground-muted)]">
+                      Bonus · Campeón inicial
+                    </p>
+                    <p className="mt-1 text-[10px] text-[var(--foreground-muted)]">
+                      Tu pronóstico original de campeón al inicio del torneo
+                    </p>
+                    <p className="mt-3 text-4xl font-black uppercase tracking-tight">
+                      {champ.initialChampionName ?? displayTeam(initialChampionCode, initialChampionCode).name}
+                    </p>
+                    <p className="mt-3 font-mono text-xs font-bold uppercase tracking-[0.2em]">
+                      Real: {champ.actualChampion?.name ?? "—"}{" "}
+                      {champ.initialChampionBonus ? (
+                        <span className="text-emerald-700">✓ +350 pts bonus</span>
+                      ) : (
+                        <span className="text-red-600">✗</span>
+                      )}
+                    </p>
                   </div>
                 )}
               </div>

@@ -342,7 +342,15 @@ export function computeLeaderboard(
       br.knockout.points += POINTS.RUNNER_UP;
     }
 
-    br.total = br.group.points + br.knockout.points;
+    // Bonus for correctly predicting the champion in the initial submission
+    // (stored in prediction.champion, set when the user first completed their bracket).
+    // Awarded regardless of bracket-derived champion points so users whose QF/SF
+    // matchups were wrong still get credit for picking the right champion early.
+    if (knockReal.champion && p.champion?.code === knockReal.champion) {
+      br.bonus = POINTS.CHAMPION_AND_RUNNER_UP;
+    }
+
+    br.total = br.group.points + br.knockout.points + br.bonus;
     rows.push({
       email: user.email,
       name: user.name,
