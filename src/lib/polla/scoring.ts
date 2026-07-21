@@ -342,14 +342,25 @@ export function computeLeaderboard(
       br.knockout.points += POINTS.RUNNER_UP;
     }
 
-    // Bonus for correctly predicting the champion/runner-up in the initial submission
-    // (stored in prediction.champion, set when the user first completed their bracket).
-    // Awarded regardless of bracket-derived champion points so users whose QF/SF
-    // matchups were wrong still get credit for picking the right team early.
-    if (knockReal.champion && p.champion?.code === knockReal.champion) {
-      br.bonus = POINTS.CHAMPION_AND_RUNNER_UP; // 350
-    } else if (knockReal.runnerUp && p.champion?.code === knockReal.runnerUp) {
-      br.bonus = POINTS.RUNNER_UP; // 250
+    // Bonus for correctly predicting the champion/runner-up in the initial submission.
+    // Uses prediction.champion (their stored pick) + the other finalist in their stored
+    // final pick to determine the tier: both right = 350, champion only = 300, runner-up only = 250.
+    const pickedChamp = p.champion?.code ?? null;
+    const storedFinal = p.knockout?.final;
+    const pickedRunnerUp =
+      pickedChamp && storedFinal
+        ? pickedChamp === storedFinal.homeTeamCode ? storedFinal.awayTeamCode
+          : pickedChamp === storedFinal.awayTeamCode ? storedFinal.homeTeamCode
+          : null
+        : null;
+    if (pickedChamp && knockReal.champion && pickedChamp === knockReal.champion) {
+      if (pickedRunnerUp && knockReal.runnerUp && pickedRunnerUp === knockReal.runnerUp) {
+        br.bonus = POINTS.CHAMPION_AND_RUNNER_UP; // 350 — both correct
+      } else {
+        br.bonus = POINTS.CHAMPION; // 300 — champion only
+      }
+    } else if (pickedChamp && knockReal.runnerUp && pickedChamp === knockReal.runnerUp) {
+      br.bonus = POINTS.RUNNER_UP; // 250 — runner-up only
     }
 
     br.total = br.group.points + br.knockout.points + br.bonus;

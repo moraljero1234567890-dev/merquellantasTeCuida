@@ -161,10 +161,17 @@ export async function GET(request: NextRequest, ctx: { params: Promise<Params> }
     return NextResponse.json({ error: "Attempt exceeds allowed quota" }, { status: 403 });
   }
   let prediction = await loadOrCreate(cedula, attempt);
-  // Capture before recompute — this is the user's original champion pick as stored in
-  // MongoDB (set when they first completed their bracket). The recompute below can
-  // overwrite prediction.champion so we preserve the original value here.
+  // Capture before recompute — these are the user's original picks as stored in
+  // MongoDB. The recompute below overwrites prediction.champion and the final team
+  // codes with real results, so we preserve the originals here for bonus display.
   const initialChampionCode = prediction.champion?.code ?? null;
+  const storedFinal = prediction.knockout?.final;
+  const initialRunnerUpCode =
+    initialChampionCode && storedFinal
+      ? initialChampionCode === storedFinal.homeTeamCode ? storedFinal.awayTeamCode
+        : initialChampionCode === storedFinal.awayTeamCode ? storedFinal.homeTeamCode
+        : null
+      : null;
   const lockStatus = await getLockStatus();
 
   // If actual standings should be used, recompute bracket from actual results
@@ -179,7 +186,7 @@ export async function GET(request: NextRequest, ctx: { params: Promise<Params> }
   const lockInfo = await getKnockoutLockInfo();
   const lockedMatchIds = lockedKnockoutMatchIds(prediction.knockout, lockInfo);
 
-  return NextResponse.json({ prediction, lockStatus, lockedMatchIds, initialChampionCode });
+  return NextResponse.json({ prediction, lockStatus, lockedMatchIds, initialChampionCode, initialRunnerUpCode });
 }
 
 type PostBody =

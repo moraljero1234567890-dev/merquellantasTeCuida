@@ -260,18 +260,25 @@ export default function PollaDashboardPage() {
                                 : "Pronóstico sin iniciar"}
                         </p>
                         {row.champion && (() => {
+                          const bonus = row.breakdown?.bonus ?? 0;
                           const isChamp = realChampion && row.champion.code === realChampion.code;
                           const isRunner = !isChamp && realRunnerUp && row.champion.code === realRunnerUp.code;
+                          const decided = !!(realChampion);
                           return (
                             <p className="mt-1 flex flex-wrap items-center gap-2 text-sm text-[var(--foreground-soft)]">
                               <span>Tu campeón inicial:</span>
                               <span className="font-semibold text-[var(--foreground)]">{row.champion.name}</span>
-                              {isChamp && (
+                              {decided && bonus === 350 && (
                                 <span className="rounded-sm bg-emerald-600 px-1.5 py-0.5 font-mono text-[9px] font-black uppercase tracking-[0.15em] text-white">
-                                  Campeón ✓ +350
+                                  Campeón+Sub ✓ +350
                                 </span>
                               )}
-                              {isRunner && (
+                              {decided && bonus === 300 && isChamp && (
+                                <span className="rounded-sm bg-emerald-600 px-1.5 py-0.5 font-mono text-[9px] font-black uppercase tracking-[0.15em] text-white">
+                                  Campeón ✓ +300
+                                </span>
+                              )}
+                              {decided && bonus === 250 && isRunner && (
                                 <span className="rounded-sm bg-amber-500 px-1.5 py-0.5 font-mono text-[9px] font-black uppercase tracking-[0.15em] text-white">
                                   Subcampeón ✓ +250
                                 </span>
