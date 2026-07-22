@@ -309,20 +309,24 @@ export function computeLeaderboard(
       }
     }
 
-    // Bonus for correctly predicting the champion/runner-up in the initial submission.
-    // The final match itself is already scored via the allKnockoutPicks loop (100/50/0).
-    // Do NOT add champion/runner-up points to br.knockout.points here — that would
-    // double-count on top of the flat per-match scoring above.
-    // Uses prediction.champion (their stored pick) + the other finalist in their stored
-    // final pick to determine the tier: both right = 350, champion only = 300, runner-up only = 250.
-    const pickedChamp = p.champion?.code ?? null;
-    const storedFinal = p.knockout?.final;
-    const pickedRunnerUp =
-      pickedChamp && storedFinal
-        ? pickedChamp === storedFinal.homeTeamCode ? storedFinal.awayTeamCode
-          : pickedChamp === storedFinal.awayTeamCode ? storedFinal.homeTeamCode
-          : null
-        : null;
+    // Bonus for correctly predicting the champion/runner-up in the INITIAL submission
+    // (before any bracket-cascade edits during knockout windows).
+    // Uses prediction.initialChampion/initialRunnerUp (frozen at first completion).
+    // Falls back to prediction.champion + stored final pick for older predictions
+    // that predate the initialChampion field — these may reflect an edited pick.
+    // The final match itself is already scored via allKnockoutPicks (100/50/0).
+    const pickedChamp = (p.initialChampion?.code ?? p.champion?.code) ?? null;
+    const pickedRunnerUp: string | null = p.initialRunnerUp?.code
+      ?? (() => {
+        const storedFinal = p.knockout?.final;
+        return pickedChamp && storedFinal
+          ? pickedChamp === storedFinal.homeTeamCode
+            ? storedFinal.awayTeamCode
+            : pickedChamp === storedFinal.awayTeamCode
+              ? storedFinal.homeTeamCode
+              : null
+          : null;
+      })();
     if (pickedChamp && knockReal.champion && pickedChamp === knockReal.champion) {
       br.knockout.champion = 1;
       if (pickedRunnerUp && knockReal.runnerUp && pickedRunnerUp === knockReal.runnerUp) {

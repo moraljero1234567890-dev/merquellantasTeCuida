@@ -39,6 +39,8 @@ function emptyPrediction(cedula: string, attempt: number): PredictionDoc {
     groupScores: {},
     knockout: { r32: [], r16: [], qf: [], sf: [], third: null, final: null },
     champion: null,
+    initialChampion: null,
+    initialRunnerUp: null,
     updatedAt: new Date(),
     completedAt: null,
   };
@@ -318,7 +320,30 @@ export async function POST(request: NextRequest, ctx: { params: Promise<Params> 
   const hasChampion = !!prediction.champion;
 
   if (allGroupsFilled && allKnockoutFilled && hasChampion && prediction.status === "draft") {
-    prediction = { ...prediction, status: "complete", completedAt: new Date() };
+    // Freeze initialChampion/initialRunnerUp at this first-completion moment so
+    // subsequent saves during editing windows cannot overwrite them. The bracket
+    // cascade updates prediction.champion on every save; these fields preserve
+    // what the user actually predicted before any real results were known.
+    const champCode = prediction.champion?.code ?? null;
+    const finalPick = prediction.knockout.final;
+    const ruCode =
+      champCode && finalPick
+        ? champCode === finalPick.homeTeamCode
+          ? finalPick.awayTeamCode
+          : champCode === finalPick.awayTeamCode
+            ? finalPick.homeTeamCode
+            : null
+        : null;
+    const ruName = ruCode && finalPick
+      ? ruCode === finalPick.homeTeamCode ? finalPick.homeTeamName : finalPick.awayTeamName
+      : null;
+    prediction = {
+      ...prediction,
+      status: "complete",
+      completedAt: new Date(),
+      initialChampion: prediction.champion ?? null,
+      initialRunnerUp: ruCode && ruName ? { code: ruCode, name: ruName } : null,
+    };
   }
 
   prediction.updatedAt = new Date();

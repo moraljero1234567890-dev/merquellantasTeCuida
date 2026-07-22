@@ -91,6 +91,10 @@ export type PredictionDoc = {
     final: KnockoutPick | null;
   };
   champion: { code: string; name: string } | null;
+  // Frozen at first completion (draft→complete). Never overwritten by subsequent
+  // saves so the bracket cascade during editing windows can't change it.
+  initialChampion?: { code: string; name: string } | null;
+  initialRunnerUp?: { code: string; name: string } | null;
   updatedAt: Date;
   completedAt: Date | null;
 };

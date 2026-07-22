@@ -508,27 +508,105 @@ export function buildKnockoutFromGroup(
   });
 
   // Helper: preserve a user's scores for a bracket slot even when the team codes
-  // changed (e.g. a new R32 result shifted which teams appear in R16). We always
-  // carry scores forward so users don't lose work; the team codes update to the
-  // real bracket. If teams are the same the full captured prediction is kept; if
-  // they changed we reset the capture flags so applyActual re-derives them from
-  // the preserved home/away scores on the next overwrite.
+  // changed (e.g. a new R32 result shifted which teams appear in R16/QF/SF).
+  // When teams are the same, carry everything forward unchanged.
+  // When teams changed, remap scores by team code so a home/away orientation
+  // flip or a different opponent doesn't scramble whose score belongs to whom.
+  // If a real bracket team (e.g. ARG) wasn't in the user's pick at all, that
+  // slot gets null — hasScore stays false and applyActual gets 0 pts, which is
+  // correct because the user never predicted that team in this matchup.
   function preservePrev(fresh: KnockoutPick, prev: KnockoutPick): KnockoutPick {
     const sameTeams =
       prev.homeTeamCode === fresh.homeTeamCode &&
       prev.awayTeamCode === fresh.awayTeamCode;
+
+    if (sameTeams) {
+      return {
+        ...fresh,
+        home: prev.home,
+        away: prev.away,
+        penaltyWinner: prev.penaltyWinner,
+        userPredictedWinner: prev.userPredictedWinner,
+        userPredictedDraw: prev.userPredictedDraw,
+        userPredictedHome: prev.userPredictedHome,
+        userPredictedAway: prev.userPredictedAway,
+      };
+    }
+
+    // Teams changed: build a code→score map from prev and look up each fresh team.
+    const prevByCode: Partial<Record<string, number | null>> = {};
+    if (prev.homeTeamCode) prevByCode[prev.homeTeamCode] = prev.home;
+    if (prev.awayTeamCode) prevByCode[prev.awayTeamCode] = prev.away;
+
+    const newHome = fresh.homeTeamCode ? (prevByCode[fresh.homeTeamCode] ?? null) : null;
+    const newAway = fresh.awayTeamCode ? (prevByCode[fresh.awayTeamCode] ?? null) : null;
+
+    // Remap penalty winner by team identity, not position.
+    let newPenaltyWinner: KnockoutPick["penaltyWinner"] = null;
+    if (prev.penaltyWinner === "home") {
+      if (fresh.homeTeamCode === prev.homeTeamCode) newPenaltyWinner = "home";
+      else if (fresh.awayTeamCode === prev.homeTeamCode) newPenaltyWinner = "away";
+    } else if (prev.penaltyWinner === "away") {
+      if (fresh.awayTeamCode === prev.awayTeamCode) newPenaltyWinner = "away";
+      else if (fresh.homeTeamCode === prev.awayTeamCode) newPenaltyWinner = "home";
+    }
+
+    // Derive the user's originally-predicted winner by team code from prev.
+    const prevWinner: string | null =
+      prev.userPredictedWinner !== undefined
+        ? prev.userPredictedWinner
+        : prev.home != null && prev.away != null
+          ? prev.home > prev.away
+            ? prev.homeTeamCode
+            : prev.away > prev.home
+              ? prev.awayTeamCode
+              : prev.penaltyWinner === "home"
+                ? prev.homeTeamCode
+                : prev.penaltyWinner === "away"
+                  ? prev.awayTeamCode
+                  : null
+          : null;
+
+    // Remap the winner to fresh team codes. null = user didn't predict either team.
+    const remappedWinner: string | null =
+      prevWinner === null
+        ? null
+        : prevWinner === prev.homeTeamCode
+          ? fresh.homeTeamCode === prev.homeTeamCode
+            ? fresh.homeTeamCode
+            : fresh.awayTeamCode === prev.homeTeamCode
+              ? fresh.awayTeamCode
+              : null
+          : prevWinner === prev.awayTeamCode
+            ? fresh.awayTeamCode === prev.awayTeamCode
+              ? fresh.awayTeamCode
+              : fresh.homeTeamCode === prev.awayTeamCode
+                ? fresh.homeTeamCode
+                : null
+            : null;
+
+    // Remap the user's exact predicted scores by team code.
+    const predHome = prev.userPredictedHome !== undefined ? prev.userPredictedHome : prev.home;
+    const predAway = prev.userPredictedAway !== undefined ? prev.userPredictedAway : prev.away;
+    const prevPredByCode: Partial<Record<string, number | null>> = {};
+    if (prev.homeTeamCode) prevPredByCode[prev.homeTeamCode] = predHome;
+    if (prev.awayTeamCode) prevPredByCode[prev.awayTeamCode] = predAway;
+
+    const newPredHome = fresh.homeTeamCode ? (prevPredByCode[fresh.homeTeamCode] ?? null) : null;
+    const newPredAway = fresh.awayTeamCode ? (prevPredByCode[fresh.awayTeamCode] ?? null) : null;
+
     return {
       ...fresh,
-      home: prev.home,
-      away: prev.away,
-      penaltyWinner: prev.penaltyWinner,
-      ...(sameTeams
-        ? {
-            userPredictedWinner: prev.userPredictedWinner,
-            userPredictedDraw: prev.userPredictedDraw,
-            userPredictedHome: prev.userPredictedHome,
-            userPredictedAway: prev.userPredictedAway,
-          }
+      home: newHome,
+      away: newAway,
+      penaltyWinner: newPenaltyWinner,
+      // Explicitly null (not undefined) so applyActual's isFirstOverwrite guard
+      // stays false and never re-captures from positionally-mismatched scores.
+      userPredictedWinner: remappedWinner,
+      userPredictedHome: newPredHome,
+      userPredictedAway: newPredAway,
+      ...(newPredHome != null && newPredAway != null
+        ? { userPredictedDraw: newPredHome === newPredAway }
         : {}),
     };
   }
