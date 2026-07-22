@@ -309,40 +309,10 @@ export function computeLeaderboard(
       }
     }
 
-    // Champion / runner-up: use userPredictedWinner on the final pick so scoring
-    // stays correct after the final is played and applyActual overwrites the scores.
-    const finalPick = ko.final;
-    const myChampion =
-      finalPick
-        ? finalPick.userPredictedWinner !== undefined
-          ? finalPick.userPredictedWinner
-          : pickedWinnerCode(finalPick)
-        : null;
-    const myRunnerUp =
-      myChampion && finalPick
-        ? myChampion === finalPick.homeTeamCode
-          ? finalPick.awayTeamCode
-          : myChampion === finalPick.awayTeamCode
-            ? finalPick.homeTeamCode
-            : null
-        : null;
-
-    const gotChampion = !!knockReal.champion && myChampion === knockReal.champion;
-    const gotRunnerUp = !!knockReal.runnerUp && !!myRunnerUp && myRunnerUp === knockReal.runnerUp;
-
-    if (gotChampion && gotRunnerUp) {
-      br.knockout.champion = 1;
-      br.knockout.runnerUp = 1;
-      br.knockout.points += POINTS.CHAMPION_AND_RUNNER_UP;
-    } else if (gotChampion) {
-      br.knockout.champion = 1;
-      br.knockout.points += POINTS.CHAMPION;
-    } else if (gotRunnerUp) {
-      br.knockout.runnerUp = 1;
-      br.knockout.points += POINTS.RUNNER_UP;
-    }
-
     // Bonus for correctly predicting the champion/runner-up in the initial submission.
+    // The final match itself is already scored via the allKnockoutPicks loop (100/50/0).
+    // Do NOT add champion/runner-up points to br.knockout.points here — that would
+    // double-count on top of the flat per-match scoring above.
     // Uses prediction.champion (their stored pick) + the other finalist in their stored
     // final pick to determine the tier: both right = 350, champion only = 300, runner-up only = 250.
     const pickedChamp = p.champion?.code ?? null;
@@ -354,12 +324,15 @@ export function computeLeaderboard(
           : null
         : null;
     if (pickedChamp && knockReal.champion && pickedChamp === knockReal.champion) {
+      br.knockout.champion = 1;
       if (pickedRunnerUp && knockReal.runnerUp && pickedRunnerUp === knockReal.runnerUp) {
+        br.knockout.runnerUp = 1;
         br.bonus = POINTS.CHAMPION_AND_RUNNER_UP; // 350 — both correct
       } else {
         br.bonus = POINTS.CHAMPION; // 300 — champion only
       }
     } else if (pickedChamp && knockReal.runnerUp && pickedChamp === knockReal.runnerUp) {
+      br.knockout.runnerUp = 1;
       br.bonus = POINTS.RUNNER_UP; // 250 — runner-up only
     }
 
