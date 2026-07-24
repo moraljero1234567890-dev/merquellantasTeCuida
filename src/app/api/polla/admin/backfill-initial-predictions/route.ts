@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
   // With ?force=true, re-process ALL completed predictions (including those
   // previously backfilled to null). Without it, only process missing ones.
   const query = force
-    ? { status: { $in: ["complete", "locked"] } }
+    ? { status: { $in: ["complete", "locked"] as const } }
     : { initialChampion: { $exists: false } };
 
   const predictions = await col.find(query).toArray();
