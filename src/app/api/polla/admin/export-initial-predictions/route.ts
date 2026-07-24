@@ -17,6 +17,43 @@ export async function GET(request: NextRequest) {
 
   const nameByCode = new Map(participants.map((p) => [p.cedula, p.name]));
 
+  // Derive champion/runner-up from stored final pick when initialChampion was
+  // never frozen (predictions completed before the field was introduced).
+  function derivedChampion(p: (typeof predictions)[number]) {
+    if (p.initialChampion) return p.initialChampion;
+    const final = p.knockout?.final;
+    if (!final) return p.champion ?? null;
+    let code: string | null = null;
+    if (final.userPredictedWinner !== undefined) {
+      code = final.userPredictedWinner ?? null;
+    } else {
+      code = p.champion?.code ?? null;
+    }
+    if (!code) return null;
+    const name =
+      code === final.homeTeamCode ? final.homeTeamName
+      : code === final.awayTeamCode ? final.awayTeamName
+      : p.champion?.name ?? "";
+    return { code, name };
+  }
+
+  function derivedRunnerUp(p: (typeof predictions)[number]) {
+    if (p.initialRunnerUp) return p.initialRunnerUp;
+    const final = p.knockout?.final;
+    const champ = derivedChampion(p);
+    if (!final || !champ?.code) return null;
+    const ruCode =
+      champ.code === final.homeTeamCode ? final.awayTeamCode
+      : champ.code === final.awayTeamCode ? final.homeTeamCode
+      : null;
+    if (!ruCode) return null;
+    const ruName =
+      ruCode === final.homeTeamCode ? final.homeTeamName
+      : ruCode === final.awayTeamCode ? final.awayTeamName
+      : "";
+    return { code: ruCode, name: ruName };
+  }
+
   const rows = predictions
     .sort((a, b) => {
       const nc = (nameByCode.get(a.userEmail) ?? a.userEmail).localeCompare(
@@ -25,16 +62,20 @@ export async function GET(request: NextRequest) {
       );
       return nc !== 0 ? nc : a.attempt - b.attempt;
     })
-    .map((p) => ({
-      Nombre: nameByCode.get(p.userEmail) ?? "",
-      Cedula: p.userEmail,
-      Intento: p.attempt,
-      Estado: p.status,
-      "Campeon inicial (codigo)": p.initialChampion?.code ?? "",
-      "Campeon inicial (nombre)": p.initialChampion?.name ?? "",
-      "Subcampeon inicial (codigo)": p.initialRunnerUp?.code ?? "",
-      "Subcampeon inicial (nombre)": p.initialRunnerUp?.name ?? "",
-    }));
+    .map((p) => {
+      const champ = derivedChampion(p);
+      const ru = derivedRunnerUp(p);
+      return {
+        Nombre: nameByCode.get(p.userEmail) ?? "",
+        Cedula: p.userEmail,
+        Intento: p.attempt,
+        Estado: p.status,
+        "Campeon inicial (codigo)": champ?.code ?? "",
+        "Campeon inicial (nombre)": champ?.name ?? "",
+        "Subcampeon inicial (codigo)": ru?.code ?? "",
+        "Subcampeon inicial (nombre)": ru?.name ?? "",
+      };
+    });
 
   const ws = XLSX.utils.json_to_sheet(rows);
   const wb = XLSX.utils.book_new();
