@@ -27,14 +27,8 @@ export async function GET(request: NextRequest) {
     const upw = final.userPredictedWinner;
     if (typeof upw === "string" && upw !== "") {
       code = upw;
-    } else if (p.champion?.code) {
-      code = p.champion.code;
-    } else if (final.homeTeamCode && final.awayTeamCode &&
-               final.home != null && final.away != null) {
-      if (final.home > final.away) code = final.homeTeamCode;
-      else if (final.away > final.home) code = final.awayTeamCode;
-      else if (final.penaltyWinner === "home") code = final.homeTeamCode;
-      else if (final.penaltyWinner === "away") code = final.awayTeamCode;
+    } else {
+      code = p.champion?.code ?? null;
     }
     if (!code) return null;
     const name =
