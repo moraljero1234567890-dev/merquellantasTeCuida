@@ -66,9 +66,24 @@ export async function POST(request: NextRequest) {
         champCode = upw;
         source = "userPredictedWinner";
       } else if (p.champion?.code) {
-        // Fall through to the stored champion (covers upw=null and upw=undefined).
+        // Fall through to stored champion (covers upw=null and upw=undefined).
         champCode = p.champion.code;
         source = "prediction.champion";
+      } else if (final.homeTeamCode && final.awayTeamCode &&
+                 final.home != null && final.away != null) {
+        // userPredictedWinner was set to null at a moment when scores were null
+        // (edge case: actual standings kicked in before user entered final scores),
+        // but the user later entered scores. Derive winner from those scores.
+        if (final.home > final.away) {
+          champCode = final.homeTeamCode;
+        } else if (final.away > final.home) {
+          champCode = final.awayTeamCode;
+        } else if (final.penaltyWinner === "home") {
+          champCode = final.homeTeamCode;
+        } else if (final.penaltyWinner === "away") {
+          champCode = final.awayTeamCode;
+        }
+        if (champCode) source = "final.scores";
       }
 
       if (champCode) {
