@@ -4,19 +4,23 @@ import { pollaPredictionsCollection } from "@/lib/polla/collections";
 
 export const dynamic = "force-dynamic";
 
-// Reconstructs initialChampion / initialRunnerUp for predictions that were
-// completed before those fields were introduced. Logic (in priority order):
+// Reconstructs initialChampion / initialRunnerUp for predictions missing those
+// fields. Priority order:
 //
-// 1. If final.userPredictedWinner is a string (set when real results first
-//    overwrote the final pick): that IS the user's original champion pick.
-//    Runner-up = the other team in the final slot.
+// 1. final.userPredictedWinner is a non-null string → real results overwrote the
+//    final pick at least once and captured the user's original winner pick. Use it.
 //
-// 2. Else if prediction.champion exists: use it as the champion.
-//    Runner-up = the other team in the final slot.
+// 2. prediction.champion is set → the stored champion from the user's bracket
+//    (preserved by userPickedChampionFromFinal on every save). Use it.
+//    This also covers the case where userPredictedWinner is explicitly null
+//    (user's predicted finalists ≠ actual finalists) but the DB champion field
+//    still reflects their original pick from before actual standings kicked in.
 //
-// 3. Otherwise: cannot reconstruct — leave null.
+// 3. Cannot reconstruct — leave null.
 //
-// The ?dryRun=true query param reports what would change without writing.
+// Runner-up is always derived as the other team in the final slot.
+// ?dryRun=true reports what would change without writing.
+// ?force=true re-processes records that were already backfilled to null.
 
 export async function POST(request: NextRequest) {
   if (!isPollaAdminRequest(request)) {
@@ -24,11 +28,17 @@ export async function POST(request: NextRequest) {
   }
 
   const dryRun = request.nextUrl.searchParams.get("dryRun") === "true";
+  const force = request.nextUrl.searchParams.get("force") === "true";
 
   const col = await pollaPredictionsCollection();
-  const predictions = await col
-    .find({ initialChampion: { $exists: false } })
-    .toArray();
+
+  // With ?force=true, re-process ALL completed predictions (including those
+  // previously backfilled to null). Without it, only process missing ones.
+  const query = force
+    ? { status: { $in: ["complete", "locked"] } }
+    : { initialChampion: { $exists: false } };
+
+  const predictions = await col.find(query).toArray();
 
   const results: Array<{
     id: string;
@@ -41,8 +51,6 @@ export async function POST(request: NextRequest) {
   }> = [];
 
   for (const p of predictions) {
-    if (p.status === "draft") continue; // never completed — nothing to backfill
-
     const final = p.knockout?.final ?? null;
     let champCode: string | null = null;
     let champName: string | null = null;
@@ -51,12 +59,14 @@ export async function POST(request: NextRequest) {
     let source = "none";
 
     if (final) {
-      if (final.userPredictedWinner !== undefined) {
-        // Real results overwrote this pick at least once — userPredictedWinner
-        // is the preserved original.
-        champCode = final.userPredictedWinner ?? null;
+      const upw = final.userPredictedWinner;
+
+      if (typeof upw === "string" && upw !== "") {
+        // Real results overwrote the final pick and captured the user's winner.
+        champCode = upw;
         source = "userPredictedWinner";
       } else if (p.champion?.code) {
+        // Fall through to the stored champion (covers upw=null and upw=undefined).
         champCode = p.champion.code;
         source = "prediction.champion";
       }
@@ -104,7 +114,10 @@ export async function POST(request: NextRequest) {
 
   return NextResponse.json({
     dryRun,
+    force,
     totalProcessed: results.length,
+    filled: results.filter((r) => r.champion !== null).length,
+    stillNull: results.filter((r) => r.champion === null).length,
     results,
   });
 }

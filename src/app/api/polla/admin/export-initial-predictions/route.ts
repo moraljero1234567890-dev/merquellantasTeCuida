@@ -24,9 +24,11 @@ export async function GET(request: NextRequest) {
     const final = p.knockout?.final;
     if (!final) return p.champion ?? null;
     let code: string | null = null;
-    if (final.userPredictedWinner !== undefined) {
-      code = final.userPredictedWinner ?? null;
+    const upw = final.userPredictedWinner;
+    if (typeof upw === "string" && upw !== "") {
+      code = upw;
     } else {
+      // upw null or undefined — fall back to stored champion
       code = p.champion?.code ?? null;
     }
     if (!code) return null;
