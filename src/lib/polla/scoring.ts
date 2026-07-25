@@ -309,24 +309,30 @@ export function computeLeaderboard(
       }
     }
 
-    // Bonus for correctly predicting the champion/runner-up in the INITIAL submission
-    // (before any bracket-cascade edits during knockout windows).
-    // Uses prediction.initialChampion/initialRunnerUp (frozen at first completion).
-    // Falls back to prediction.champion + stored final pick for older predictions
-    // that predate the initialChampion field — these may reflect an edited pick.
-    // The final match itself is already scored via allKnockoutPicks (100/50/0).
-    const pickedChamp = (p.initialChampion?.code ?? p.champion?.code) ?? null;
-    const pickedRunnerUp: string | null = p.initialRunnerUp?.code
-      ?? (() => {
-        const storedFinal = p.knockout?.final;
-        return pickedChamp && storedFinal
-          ? pickedChamp === storedFinal.homeTeamCode
-            ? storedFinal.awayTeamCode
-            : pickedChamp === storedFinal.awayTeamCode
-              ? storedFinal.homeTeamCode
-              : null
-          : null;
-      })();
+    // Champion/runner-up bonus. Derives the user's champion pick from the
+    // recomputed bracket's final pick (ko.final.userPredictedWinner), which is
+    // frozen the first time a real result overwrites the pick. This is more
+    // reliable than p.initialChampion, which may have been set by a since-reverted
+    // backfill that incorrectly derived from actual final scores rather than the
+    // user's prediction. Runner-up uses the stored final's other team so the
+    // user's original predicted runner-up is preserved. The final match is also
+    // scored separately via allKnockoutPicks (100/50/0).
+    const pickedChamp: string | null = (() => {
+      const finalPick = ko.final;
+      if (!finalPick) return p.champion?.code ?? null;
+      // userPredictedWinner is set (to null or a code) once applyActual has run.
+      if (finalPick.userPredictedWinner !== undefined) return finalPick.userPredictedWinner;
+      // Final not yet played: derive from the user's still-unoverwritten stored scores.
+      return pickedWinnerCode(finalPick) ?? p.champion?.code ?? null;
+    })();
+    const pickedRunnerUp: string | null = (() => {
+      if (!pickedChamp) return null;
+      const storedFinal = p.knockout?.final;
+      if (!storedFinal) return null;
+      if (pickedChamp === storedFinal.homeTeamCode) return storedFinal.awayTeamCode || null;
+      if (pickedChamp === storedFinal.awayTeamCode) return storedFinal.homeTeamCode || null;
+      return null;
+    })();
     if (pickedChamp && knockReal.champion && pickedChamp === knockReal.champion) {
       br.knockout.champion = 1;
       if (pickedRunnerUp && knockReal.runnerUp && pickedRunnerUp === knockReal.runnerUp) {
