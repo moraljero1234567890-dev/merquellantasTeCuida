@@ -51,7 +51,6 @@ const DashboardNavbar = ({ activePage = 'home' }) => {
     { id: 'pqrsf', href: '/dashboard/pqrsf', icon: <HelpCircle size={18} />, label: 'PQRSF' },
     { id: 'fondo', href: '/dashboard/fondo', icon: <Landmark size={18} />, label: 'Fonalmerque' },
     { id: 'elearning', href: '/dashboard/elearning', icon: <GraduationCap size={18} />, label: 'E-Learning' },
-    { id: 'rit', href: '/dashboard/rit', icon: <BookOpen size={18} />, label: 'RIT' },
   ];
 
   const navItems = profile?.rol === 'externo'

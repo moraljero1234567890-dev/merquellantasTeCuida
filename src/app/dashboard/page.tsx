@@ -1331,7 +1331,7 @@ useEffect(() => {
                 </div>
 
                 {/* RIT — Reglamento Interno de Trabajo */}
-                <div className="bg-white rounded-2xl shadow-sm p-5 border border-gray-100 hover:shadow-md transition-shadow duration-300 relative overflow-hidden">
+                {/* <div className="bg-white rounded-2xl shadow-sm p-5 border border-gray-100 hover:shadow-md transition-shadow duration-300 relative overflow-hidden">
                   <div className="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-[#f4a900] to-[#ffb347]" />
                   <div className="flex items-center gap-4">
                     <div className="w-12 h-12 rounded-xl bg-[#f4a900]/10 flex items-center justify-center flex-shrink-0">
@@ -1349,7 +1349,7 @@ useEffect(() => {
                       <ChevronRight className="h-3.5 w-3.5" />
                     </a>
                   </div>
-                </div>
+                </div> */}
 
                 {/* Upcoming activities with hover effects */}
                 <div className="bg-white rounded-2xl shadow-sm p-6 border border-gray-100 hover:shadow-md transition-shadow duration-300 relative overflow-hidden">

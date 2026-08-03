@@ -63,6 +63,31 @@ function finishedGroupMatches(matches: MatchDoc[]): FinishedGroupMatch[] {
 }
 
 
+function knockoutFinalResult(matches: MatchDoc[]): {
+  champion: string | null;
+  runnerUp: string | null;
+} {
+  for (const m of matches) {
+    if (m.stage !== "FINAL" || m.status !== "FINISHED") continue;
+    const ft = m.score?.fullTime;
+    const pens = m.score?.penalties;
+    if (!ft) continue;
+    let winnerCode: string | null = null;
+    if (ft.home > ft.away) winnerCode = m.home.code;
+    else if (ft.away > ft.home) winnerCode = m.away.code;
+    else if (pens) {
+      if (pens.home > pens.away) winnerCode = m.home.code;
+      else if (pens.away > pens.home) winnerCode = m.away.code;
+    }
+    if (!winnerCode) continue;
+    return {
+      champion: winnerCode,
+      runnerUp: winnerCode === m.home.code ? m.away.code : m.home.code,
+    };
+  }
+  return { champion: null, runnerUp: null };
+}
+
 function pickedWinnerCode(p: KnockoutPick): string | null {
   if (p.home == null || p.away == null) return null;
   if (p.home > p.away) return p.homeTeamCode;
@@ -87,6 +112,8 @@ export function computeLeaderboard(
   users: { email: string; name: string; attemptsAllowed: number }[],
 ): LeaderboardRow[] {
   const groupReal = finishedGroupMatches(matches);
+
+  const knockReal = knockoutFinalResult(matches);
 
   // Map "STAGE|codeA|codeB" (sorted) → real FT score + which team was home, for
   // awarding exact-score and goal-difference bonuses on knockout picks.
@@ -241,9 +268,18 @@ export function computeLeaderboard(
 
       // Exact score (requires both predicted scores)
       if (hasScore && userHome === realHome && userAway === realAway) {
-        br.knockout.exact += 1;
-        br.knockout.points += POINTS.KO_EXACT_WIN;
-        continue;
+        // For the FINAL: if the raw stored pick never had userPredictedWinner captured
+        // (undefined = saved before the capture logic existed), the userPredictedHome
+        // value was derived from pick.home which may already contain the real score
+        // (written by an older applyActual run). We can't trust it, so fall through
+        // to the winner check instead of awarding 100 pts.
+        const finalScoreTrustworthy =
+          pick.stage !== "FINAL" || p.knockout?.final?.userPredictedWinner !== undefined;
+        if (finalScoreTrustworthy) {
+          br.knockout.exact += 1;
+          br.knockout.points += POINTS.KO_EXACT_WIN;
+          continue;
+        }
       }
 
       const realIsDraw = realHome === realAway;
@@ -281,7 +317,39 @@ export function computeLeaderboard(
       }
     }
 
-    br.total = br.group.points + br.knockout.points;
+    // Champion/runner-up bonus. Derives the user's champion pick from the
+    // recomputed bracket's final pick (ko.final.userPredictedWinner), which is
+    // frozen the first time a real result overwrites the pick. Runner-up uses
+    // the stored final's other team so the user's original predicted runner-up
+    // is preserved. The final match is also scored via allKnockoutPicks (100/50/0).
+    const pickedChamp: string | null = (() => {
+      const finalPick = ko.final;
+      if (!finalPick) return p.champion?.code ?? null;
+      if (finalPick.userPredictedWinner !== undefined) return finalPick.userPredictedWinner;
+      return pickedWinnerCode(finalPick) ?? p.champion?.code ?? null;
+    })();
+    const pickedRunnerUp: string | null = (() => {
+      if (!pickedChamp) return null;
+      const storedFinal = p.knockout?.final;
+      if (!storedFinal) return null;
+      if (pickedChamp === storedFinal.homeTeamCode) return storedFinal.awayTeamCode || null;
+      if (pickedChamp === storedFinal.awayTeamCode) return storedFinal.homeTeamCode || null;
+      return null;
+    })();
+    if (pickedChamp && knockReal.champion && pickedChamp === knockReal.champion) {
+      br.knockout.champion = 1;
+      if (pickedRunnerUp && knockReal.runnerUp && pickedRunnerUp === knockReal.runnerUp) {
+        br.knockout.runnerUp = 1;
+        br.bonus = POINTS.CHAMPION_AND_RUNNER_UP; // 350 — both correct
+      } else {
+        br.bonus = POINTS.CHAMPION; // 300 — champion only
+      }
+    } else if (pickedChamp && knockReal.runnerUp && pickedChamp === knockReal.runnerUp) {
+      br.knockout.runnerUp = 1;
+      br.bonus = POINTS.RUNNER_UP; // 250 — runner-up only
+    }
+
+    br.total = br.group.points + br.knockout.points + br.bonus;
     rows.push({
       email: user.email,
       name: user.name,
