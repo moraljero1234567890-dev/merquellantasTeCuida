@@ -600,8 +600,9 @@ export default function SolicitudCreditoForm({
 
             {/* Summary */}
             {valorN > 0 && cuotasN > 0 && (
-              <div className="mt-3 grid grid-cols-2 gap-3 p-3 rounded-xl bg-orange-50 border border-orange-100">
+              <div className="mt-3 grid grid-cols-3 gap-3 p-3 rounded-xl bg-orange-50 border border-orange-100">
                 <Stat label="Tasa" value={`${amort.tasa}% mensual`} />
+                <Stat label="Cuota fija" value={fmtCurrency(amort.cuotaFija)} />
                 <Stat label="Total a pagar" value={fmtCurrency(amort.totalAPagar)} />
               </div>
             )}
