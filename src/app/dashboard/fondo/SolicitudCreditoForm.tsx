@@ -78,6 +78,7 @@ export interface SolicitudPayload {
     documentos: Documentos;
     autorizacion_aceptada: boolean;
     firma_deudor: string; // data URL
+    observaciones?: string;
   };
 }
 
@@ -359,6 +360,8 @@ export default function SolicitudCreditoForm({
     seguros: { cotizacion_poliza: false, soat_tarjeta: false },
     calamidad: { facturas_recibos: false, certificacion_calamidad: false },
   });
+  // Observaciones libres
+  const [observaciones, setObservaciones] = useState("");
   // Firma + autorización
   const [firmaDeudor, setFirmaDeudor] = useState("");
   const [autorizacion, setAutorizacion] = useState(false);
@@ -458,6 +461,7 @@ export default function SolicitudCreditoForm({
         documentos,
         autorizacion_aceptada: autorizacion,
         firma_deudor: firmaDeudor,
+        observaciones: observaciones.trim() || undefined,
       },
     };
     await onSubmit(payload);
@@ -572,7 +576,7 @@ export default function SolicitudCreditoForm({
                   ))}
                 </div>
               </Field>
-              {frecuencia === "quincenal" && (
+              {frecuencia === "mensual" && (
                 <Field label="Quincena del">
                   <div className="grid grid-cols-2 gap-2">
                     {(["15", "30"] as const).map((q) => (
@@ -596,10 +600,8 @@ export default function SolicitudCreditoForm({
 
             {/* Summary */}
             {valorN > 0 && cuotasN > 0 && (
-              <div className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-3 p-3 rounded-xl bg-orange-50 border border-orange-100">
+              <div className="mt-3 grid grid-cols-2 gap-3 p-3 rounded-xl bg-orange-50 border border-orange-100">
                 <Stat label="Tasa" value={`${amort.tasa}% mensual`} />
-                <Stat label="Cuota fija" value={fmtCurrency(amort.cuotaFija)} />
-                <Stat label="Cuota + intereses" value={fmtCurrency(cuotaIntereses)} />
                 <Stat label="Total a pagar" value={fmtCurrency(amort.totalAPagar)} />
               </div>
             )}
@@ -910,6 +912,17 @@ export default function SolicitudCreditoForm({
                 onChange={setFirmaDeudor}
               />
             </div>
+          </Section>
+
+          {/* 8. Observaciones */}
+          <Section title="8. Observaciones">
+            <textarea
+              value={observaciones}
+              onChange={(e) => setObservaciones(e.target.value)}
+              rows={3}
+              className="w-full rounded-xl border border-gray-200 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-[#f4a900]/40 resize-y"
+              placeholder="Quiero empezar a pagar tal fecha, o cualquier comentario adicional..."
+            />
           </Section>
 
           {(localError || error) && (
