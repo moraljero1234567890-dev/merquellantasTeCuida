@@ -89,14 +89,13 @@ export async function POST(req: NextRequest) {
 
   const db = await getDb();
 
-  const creditoIdAuto = isFondo
-    ? (body.credito_id || `CR-${Date.now().toString().slice(-8)}`)
-    : null;
+  const creditoIdAuto = body.credito_id || `CR-${Date.now().toString().slice(-8)}`;
 
-  const fechaCuota1 = body.fecha_cuota_1 ? new Date(body.fecha_cuota_1) : new Date();
-  const fechaTermina = new Date(fechaCuota1);
-  // Increment by days based on frecuencia
   const daysPerCuota = frecuenciaPago === 'quincenal' ? 15 : 30;
+  const fechaCuota1 = body.fecha_cuota_1
+    ? new Date(body.fecha_cuota_1)
+    : (() => { const d = new Date(); d.setDate(d.getDate() + daysPerCuota); return d; })();
+  const fechaTermina = new Date(fechaCuota1);
   fechaTermina.setDate(fechaTermina.getDate() + daysPerCuota * numCuotas);
 
   // body.solicitud is the full structured payload from SolicitudCreditoForm
@@ -112,9 +111,9 @@ export async function POST(req: NextRequest) {
     tasa_interes: tasaMensual,
     frecuencia_pago: frecuenciaPago,
     fecha_solicitud: new Date(),
-    fecha_desembolso: isFondo ? (body.fecha_desembolso ? new Date(body.fecha_desembolso) : new Date()) : null,
-    fecha_cuota_1: isFondo ? fechaCuota1 : null,
-    fecha_termina: isFondo ? fechaTermina : null,
+    fecha_desembolso: body.fecha_desembolso ? new Date(body.fecha_desembolso) : new Date(),
+    fecha_cuota_1: fechaCuota1,
+    fecha_termina: fechaTermina,
     valor_prestamo: valorPrestamo,
     numero_cuotas: numCuotas,
     cuotas_pagadas: 0,
@@ -122,7 +121,7 @@ export async function POST(req: NextRequest) {
     saldo_capital: valorPrestamo,
     saldo_interes: totalInteres,
     saldo_total: valorPrestamo + totalInteres,
-    estado: isFondo ? 'activo' : 'pendiente',
+    estado: 'activo',
     motivo_solicitud: body.motivo_solicitud || (solicitud?.destinacion_credito ?? null),
     motivo_respuesta: null,
     pagos: [],
